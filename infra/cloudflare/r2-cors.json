@@ -1,0 +1,9 @@
+[
+  {
+    "AllowedOrigins": ["https://drivorata.com", "https://www.drivorata.com", "http://localhost:5000"],
+    "AllowedMethods": ["PUT", "GET", "HEAD"],
+    "AllowedHeaders": ["Content-Type"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]

@@ -411,8 +411,8 @@ export default function PlatformTicketsPage() {
                   <div className="flex items-center gap-2">
                     <Label className="text-xs text-muted-foreground">Priority:</Label>
                     <Select
-                      value={ticketDetail.priority || "none"}
-                      onValueChange={(val) => updateMutation.mutate({ ticketId: ticketDetail.id, priority: val === "none" ? null : val })}
+                      value={ticketDetail.priority ?? "none"}
+                      onValueChange={(val) => updateMutation.mutate({ ticketId: ticketDetail.id, priority: val === "none" ? undefined : val })}
                       disabled={updateMutation.isPending}
                     >
                       <SelectTrigger className="w-[120px]" data-testid="select-ticket-priority">

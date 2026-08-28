@@ -191,8 +191,8 @@ export function useUpload(options: UseUploadOptions = {}) {
   );
 
   /**
-   * Call the backend to mark an uploaded object as publicly readable.
-   * Returns the public URL (e.g. https://storage.googleapis.com/...).
+   * Confirm the upload with the backend.
+   * Returns the canonical URL to persist (the app-served "/objects/uploads/<id>" path).
    */
   const completeUpload = useCallback(
     async (objectPath: string): Promise<string | null> => {

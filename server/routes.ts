@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { storage, getRolePriority } from "./storage";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth";
 import { registerAuthRoutes } from "./replit_integrations/auth";
-import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
+import { registerObjectStorageRoutes, objectStorage, extractObjectPath } from "./object-storage";
 import {
   insertTenantSchema,
   insertLocationSchema,
@@ -39,6 +39,7 @@ import {
   type InsertEnrollment,
   type Cart,
   type InsertScheduleSession,
+  type Payment,
 } from "@shared/schema";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
@@ -174,7 +175,7 @@ export async function registerRoutes(
 ): Promise<Server> {
   await setupAuth(app);
   registerAuthRoutes(app);
-  registerObjectStorageRoutes(app);
+  registerObjectStorageRoutes(app, { requireAuth: isAuthenticated });
   registerPlatformRoutes(app);
 
   async function requireAffiliate(req: any, res: Response, next: NextFunction) {
@@ -2387,7 +2388,7 @@ export async function registerRoutes(
         ...b,
         enrollment: b.enrollment ? {
           ...b.enrollment,
-          package: packageMap.get(b.enrollment.packageId) || null,
+          package: (b.enrollment.packageId != null ? packageMap.get(b.enrollment.packageId) : null) || null,
         } : undefined,
       }));
 
@@ -6767,13 +6768,42 @@ export async function registerRoutes(
   });
 
   // Fetches a tenant logo for embedding in a generated PDF.
-  // SSRF hardening: tenant.logoUrl is admin-editable free text, so we only
-  // honour https URLs whose hostname matches a small allowlist of known
-  // public storage hosts. Anything else (private IPs, localhost, metadata
-  // endpoints, custom hosts) is silently ignored — the PDF still renders
-  // without a logo.
+  //
+  // Uploaded logos live in our object storage and are referenced as
+  // "/objects/uploads/<uuid>" (or that path on our own host); those are read
+  // straight from the bucket. Anything else is admin-editable free text, so we
+  // only fetch https URLs whose hostname is on a small allowlist (the bucket's
+  // public domain plus LOGO_FETCH_ALLOWED_HOSTS). Private IPs, localhost,
+  // metadata endpoints and unknown hosts are silently ignored — the PDF still
+  // renders without a logo.
+  const LOGO_MAX_BYTES = 2 * 1024 * 1024;
+  function logoAllowedHosts(): string[] {
+    const hosts = new Set<string>();
+    for (const raw of (process.env.LOGO_FETCH_ALLOWED_HOSTS ?? "").split(",")) {
+      const h = raw.trim().toLowerCase();
+      if (h) hosts.add(h);
+    }
+    for (const envUrl of [process.env.R2_PUBLIC_BASE_URL]) {
+      if (!envUrl) continue;
+      try { hosts.add(new URL(envUrl).hostname.toLowerCase()); } catch {}
+    }
+    // Legacy: logos pasted before the R2 migration may still point at GCS.
+    hosts.add("storage.googleapis.com");
+    return Array.from(hosts);
+  }
   async function fetchTenantLogoForPdf(rawUrl: string | null | undefined): Promise<Buffer | null> {
     if (!rawUrl) return null;
+    const objectPath = extractObjectPath(rawUrl);
+    if (objectPath) {
+      try {
+        const obj = await objectStorage.readObject(objectPath, LOGO_MAX_BYTES);
+        if (!obj || !/^image\//i.test(obj.contentType)) return null;
+        return obj.buffer;
+      } catch (err) {
+        console.error("[pdf] failed to read logo from object storage:", err);
+        return null;
+      }
+    }
     let parsed: URL;
     try {
       parsed = new URL(rawUrl);
@@ -6784,12 +6814,7 @@ export async function registerRoutes(
     if (parsed.username || parsed.password) return null;
     if (parsed.port && parsed.port !== "443") return null;
     const host = parsed.hostname.toLowerCase();
-    const ALLOWED_LOGO_HOSTS = [
-      "storage.googleapis.com",
-      "replit.com",
-      "objectstorage.replit.com",
-    ];
-    const allowed = ALLOWED_LOGO_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+    const allowed = logoAllowedHosts().some((h) => host === h || host.endsWith(`.${h}`));
     if (!allowed) return null;
     try {
       const ctrl = new AbortController();
@@ -6801,11 +6826,10 @@ export async function registerRoutes(
       if (!resp.ok) return null;
       const ct = resp.headers.get("content-type") || "";
       if (!/^image\//i.test(ct)) return null;
-      const MAX_BYTES = 2 * 1024 * 1024;
       const lenHeader = resp.headers.get("content-length");
-      if (lenHeader && Number(lenHeader) > MAX_BYTES) return null;
+      if (lenHeader && Number(lenHeader) > LOGO_MAX_BYTES) return null;
       const arr = await resp.arrayBuffer();
-      if (arr.byteLength > MAX_BYTES) return null;
+      if (arr.byteLength > LOGO_MAX_BYTES) return null;
       return Buffer.from(arr);
     } catch {
       return null;

@@ -1,7 +1,8 @@
 import pkg from "@paypal/paypal-server-sdk";
+import type { Client as PayPalClient } from "@paypal/paypal-server-sdk";
 const { Client, Environment, OrdersController } = pkg as any;
 
-function getPayPalClient(clientId: string, clientSecret: string, mode: string): Client {
+function getPayPalClient(clientId: string, clientSecret: string, mode: string): PayPalClient {
   return new Client({
     clientCredentialsAuthCredentials: {
       oAuthClientId: clientId,

@@ -1681,8 +1681,8 @@ export function registerPlatformRoutes(app: Express): void {
             ? {
                 id: activeSub.id,
                 status: activeSub.status,
-                currentPeriodStart: new Date(activeSub.current_period_start * 1000).toISOString(),
-                currentPeriodEnd: new Date(activeSub.current_period_end * 1000).toISOString(),
+                currentPeriodStart: new Date(((activeSub as any).current_period_start ?? activeSub.items.data[0]?.current_period_start ?? 0) * 1000).toISOString(),
+                currentPeriodEnd: new Date(((activeSub as any).current_period_end ?? activeSub.items.data[0]?.current_period_end ?? 0) * 1000).toISOString(),
                 cancelAtPeriodEnd: activeSub.cancel_at_period_end,
                 items: activeSub.items.data.map((item) => ({
                   id: item.id,

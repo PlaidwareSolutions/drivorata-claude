@@ -6,6 +6,7 @@ import cors from "cors";
 import { seedPromotions } from "./seed-promotions";
 import { seedOnlineCourses } from "./seed-online-courses";
 import { storage } from "./storage";
+import { pool } from "./db";
 
 const app = express();
 
@@ -41,6 +42,23 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
+// Platform health check (Railway healthcheckPath). Registered before the
+// tenant/auth middleware so it never requires a session or tenant header.
+app.get("/api/health", async (_req, res) => {
+  const dbCheck = pool.query("SELECT 1");
+  const timeout = new Promise<never>((_, reject) => {
+    const t = setTimeout(() => reject(new Error("db health check timed out")), 2000);
+    t.unref();
+  });
+  try {
+    await Promise.race([dbCheck, timeout]);
+    res.json({ status: "ok", db: "ok" });
+  } catch (err) {
+    console.error("[health] database unreachable:", err);
+    res.status(503).json({ status: "degraded", db: "unreachable" });
+  }
+});
+
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -54,7 +72,7 @@ app.use((req, res, next) => {
 
   res.on("finish", () => {
     const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
+    if (path.startsWith("/api") && path !== "/api/health") {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
         logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
@@ -67,12 +85,21 @@ app.use((req, res, next) => {
   next();
 });
 
+// Idempotent per-tenant seeds (promotions, online-course catalog). Opt-in via
+// BOOT_SEED_TENANT_IDS so a fresh deployment doesn't mutate arbitrary tenants.
+function bootSeedTenantIds(): number[] {
+  return (process.env.BOOT_SEED_TENANT_IDS ?? "")
+    .split(",")
+    .map((s) => parseInt(s.trim(), 10))
+    .filter((n) => Number.isFinite(n) && n > 0);
+}
+
 (async () => {
   await registerRoutes(httpServer, app);
-  seedPromotions(1).catch((err) => console.error("Failed to seed promotions for tenant 1:", err));
-  seedPromotions(28).catch((err) => console.error("Failed to seed promotions for tenant 28:", err));
-  seedOnlineCourses(1).catch((err) => console.error("Failed to seed online courses for tenant 1:", err));
-  seedOnlineCourses(28).catch((err) => console.error("Failed to seed online courses for tenant 28:", err));
+  for (const tenantId of bootSeedTenantIds()) {
+    seedPromotions(tenantId).catch((err) => console.error(`Failed to seed promotions for tenant ${tenantId}:`, err));
+    seedOnlineCourses(tenantId).catch((err) => console.error(`Failed to seed online courses for tenant ${tenantId}:`, err));
+  }
   storage
     .backfillContactSubmissionReplyTokens()
     .then((n) => {
@@ -103,19 +130,25 @@ app.use((req, res, next) => {
     await setupVite(httpServer, app);
   }
 
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
+  // Serve API + client on the platform-provided PORT (Railway injects it).
   const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`serving on port ${port}`);
-    },
-  );
+  httpServer.listen({ port, host: "0.0.0.0" }, () => {
+    log(`serving on port ${port}`);
+  });
+
+  // Graceful shutdown: Railway sends SIGTERM on redeploy/scale-down. Stop
+  // accepting connections, let in-flight requests finish, then close the pool.
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log(`${signal} received, shutting down`);
+    const forceExit = setTimeout(() => process.exit(1), 10_000);
+    forceExit.unref();
+    httpServer.close(() => {
+      pool.end().finally(() => process.exit(0));
+    });
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 })();

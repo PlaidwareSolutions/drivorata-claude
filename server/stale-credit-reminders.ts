@@ -7,7 +7,7 @@ export const DEFAULT_INTERVAL_DAYS = 30;
 export interface SendReminderResult {
   enrollmentId: number;
   email: string;
-  emailStatus: "sent" | "skipped_no_provider" | "failed";
+  emailStatus: "sent" | "skipped_no_provider" | "skipped_unsubscribed" | "failed";
   inAppCreated: boolean;
   errorMsg?: string;
 }

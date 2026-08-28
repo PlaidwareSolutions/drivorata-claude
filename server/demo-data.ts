@@ -454,7 +454,7 @@ export async function applyDemoData(tenantId: number): Promise<void> {
       locationId: ed.locId,
       firstName: ed.student.firstName!,
       lastName: ed.student.lastName!,
-      email: ed.student.email,
+      email: ed.student.email!,
       phone: `(512) 555-0${200 + insertedEnrollments.length}`,
       dateOfBirth: studentDOBs[studentUsers.indexOf(ed.student)],
       parentName: (ed as any).parentName || null,
@@ -463,8 +463,8 @@ export async function applyDemoData(tenantId: number): Promise<void> {
       status: ed.status,
       amountPaid: ed.pkg.price,
       priceSnapshotCents: ed.pkg.price,
-      classroomHoursCompleted: ed.status === "completed" ? ed.pkg.classroomHoursRequired : ed.status === "in_progress" ? Math.floor(ed.pkg.classroomHoursRequired * 0.6) : 0,
-      drivingHoursCompleted: ed.status === "completed" ? ed.pkg.driveHoursRequired : ed.status === "in_progress" ? Math.floor(ed.pkg.driveHoursRequired * 0.4) : 0,
+      classroomHoursCompleted: ed.status === "completed" ? ed.pkg.classroomHoursRequired : ed.status === "in_progress" ? Math.floor((ed.pkg.classroomHoursRequired ?? 0) * 0.6) : 0,
+      drivingHoursCompleted: ed.status === "completed" ? ed.pkg.driveHoursRequired : ed.status === "in_progress" ? Math.floor((ed.pkg.driveHoursRequired ?? 0) * 0.4) : 0,
     }).returning();
     insertedEnrollments.push({ ...enr, pkgDef: ed.pkg, studentUser: ed.student, daysAgo: ed.daysAgo, enrollStatus: ed.status });
   }
@@ -665,7 +665,7 @@ export async function purgePreviewData(tenantId: number): Promise<void> {
 
         if (otherMemberships.length === 0) {
           const [u] = await tx.select().from(users).where(eq(users.id, userId));
-          if (u && u.email.includes("@preview.drivorata.com")) {
+          if (u && u.email?.includes("@preview.drivorata.com")) {
             await tx.delete(users).where(eq(users.id, userId));
           }
         }

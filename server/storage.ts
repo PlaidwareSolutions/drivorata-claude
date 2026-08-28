@@ -1613,7 +1613,7 @@ export class DatabaseStorage implements IStorage {
       list.push({
         package: it.packageId ? (pkgMap.get(it.packageId) || null) : null,
         offering: it.offeringId ? (offMap.get(it.offeringId) || null) : null,
-        quantity: it.quantity || 1,
+        quantity: (it as { quantity?: number | null }).quantity || 1,
       });
       itemsByCart.set(it.cartId, list);
     }

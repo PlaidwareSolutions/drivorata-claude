@@ -1,0 +1,45 @@
+[data-ui-context="public"] {
+  --primary: 221 83% 53%;
+  --primary-foreground: 0 0% 100%;
+  --accent: 25 95% 53%;
+  --accent-foreground: 0 0% 100%;
+  --ring: 221 83% 53%;
+  --chart-1: 221 83% 53%;
+  --chart-2: 25 95% 53%;
+  --chart-3: 160 60% 45%;
+  --chart-4: 280 65% 60%;
+  --chart-5: 340 75% 55%;
+
+  --primary-border: hsl(var(--primary));
+  --primary-border: hsl(from hsl(var(--primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+}
+
+.dark[data-ui-context="public"],
+.dark [data-ui-context="public"] {
+  --primary: 217 91% 60%;
+  --primary-foreground: 0 0% 100%;
+  --accent: 25 95% 60%;
+  --accent-foreground: 0 0% 100%;
+  --ring: 217 91% 60%;
+  --chart-1: 217 91% 60%;
+  --chart-2: 25 95% 60%;
+  --chart-3: 160 60% 50%;
+  --chart-4: 280 65% 65%;
+  --chart-5: 340 75% 60%;
+
+  --primary-border: hsl(var(--primary));
+  --primary-border: hsl(from hsl(var(--primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+}
+
+[data-ui-context="public"][data-tenant-primary] {
+  --primary: var(--tenant-primary);
+  --ring: var(--tenant-primary);
+  --chart-1: var(--tenant-primary);
+  --primary-border: hsl(var(--primary));
+  --primary-border: hsl(from hsl(var(--primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+}
+
+[data-ui-context="public"][data-tenant-accent] {
+  --accent: var(--tenant-accent);
+  --chart-2: var(--tenant-accent);
+}

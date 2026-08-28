@@ -37,6 +37,19 @@ const domainSchema = z.object({
   customDomain: z.string().min(1, "Domain is required"),
 });
 
+type PortalHostnameState = {
+  configured: boolean;
+  hostname: string | null;
+  cnameTarget: string | null;
+  id: string | null;
+  status: string | null;
+  sslStatus: string | null;
+  ready: boolean;
+  verificationErrors: string[];
+  checkedAt: string | null;
+  error: string | null;
+};
+
 type DnsCheckResult = {
   status: "verified" | "not_found" | "error";
   domain: string;
@@ -112,6 +125,7 @@ export default function DomainPage() {
       setDnsCheckResult(data);
       if (data.verified) {
         queryClient.invalidateQueries({ queryKey: ["/api/tenants", tenantId] });
+        queryClient.invalidateQueries({ queryKey: ["/api/tenants", tenantId, "domain", "portal-status"] });
         toast({ title: "Domain verified", description: "DNS TXT record found and domain is now verified." });
       } else {
         toast({ title: "DNS record not found yet", description: "Propagation can take up to 48 hours." });
@@ -120,6 +134,21 @@ export default function DomainPage() {
     onError: () => {
       toast({ title: "Failed to check DNS status", variant: "destructive" });
     },
+  });
+
+  const {
+    data: portalStatus,
+    refetch: refetchPortalStatus,
+    isFetching: portalStatusFetching,
+  } = useQuery<PortalHostnameState>({
+    queryKey: ["/api/tenants", tenantId, "domain", "portal-status"],
+    queryFn: async () => {
+      const res = await fetch(`/api/tenants/${tenantId}/domain/portal-status`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: !!tenantId && !!tenant?.domainVerified,
+    staleTime: 60 * 1000,
   });
 
   if (!currentTenant) {
@@ -404,7 +433,7 @@ export default function DomainPage() {
           </CardHeader>
           <CardContent className="space-y-2">
             <p className="text-sm text-muted-foreground">
-              Your domain <strong>{tenant.customDomain}</strong> has been verified. Your site is accessible at this domain once DNS A/CNAME records are properly configured to point to this platform.
+              Your domain <strong>{tenant.customDomain}</strong> has been verified. Point your marketing site's DNS wherever it is hosted; the staff portal subdomain below is served by Drivorata.
             </p>
             <p className="text-xs text-muted-foreground">
               To change your domain, enter a new domain above and save. This will reset the verification status.
@@ -453,15 +482,66 @@ export default function DomainPage() {
               <div className="space-y-2">
                 <p className="text-sm font-medium">DNS Setup for Staff Portal</p>
                 <p className="text-xs text-muted-foreground">
-                  Add these DNS records to your domain provider for the <code className="bg-muted px-1 rounded">{portalDomain}</code> subdomain:
+                  Add this DNS record at your domain provider so <code className="bg-muted px-1 rounded">{portalDomain}</code> reaches Drivorata:
                 </p>
-                <div className="bg-muted rounded p-3 space-y-1 text-xs font-mono">
-                  <p>A&nbsp;&nbsp;&nbsp;&nbsp;portal&nbsp;&nbsp;&nbsp;&nbsp;34.111.179.208</p>
-                  <p>TXT&nbsp;&nbsp;portal&nbsp;&nbsp;&nbsp;&nbsp;replit-verify=<span className="text-muted-foreground italic">(your Replit verification token)</span></p>
+                <div className="bg-muted rounded p-3 space-y-1 text-xs font-mono" data-testid="text-portal-dns">
+                  <p>CNAME&nbsp;&nbsp;portal&nbsp;&nbsp;{portalStatus?.cnameTarget ?? "saas.drivorata.com"}</p>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  The portal subdomain must also be added as a published domain on the Drivorata backend in Replit's deployment settings.
+                  If your DNS provider is Cloudflare, leave the record un-proxied (DNS only). HTTPS is provisioned
+                  automatically once the record resolves — usually within minutes, occasionally up to 24 hours.
                 </p>
+                {portalStatus && (
+                  <div className="flex items-center gap-2 flex-wrap" data-testid="portal-hostname-status">
+                    <Badge
+                      variant={portalStatus.ready ? "default" : "secondary"}
+                      className={portalStatus.ready ? "bg-green-600" : ""}
+                      data-testid="badge-portal-hostname"
+                    >
+                      {portalStatus.ready ? (
+                        <>
+                          <CheckCircle className="h-3 w-3 mr-1" /> Portal hostname active
+                        </>
+                      ) : portalStatus.configured ? (
+                        <>
+                          <Clock className="h-3 w-3 mr-1" /> Hostname: {portalStatus.status ?? "pending"} · SSL:{" "}
+                          {portalStatus.sslStatus ?? "pending"}
+                        </>
+                      ) : (
+                        <>
+                          <AlertCircle className="h-3 w-3 mr-1" /> Automatic setup not enabled
+                        </>
+                      )}
+                    </Badge>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => refetchPortalStatus()}
+                      disabled={portalStatusFetching}
+                      data-testid="button-refresh-portal-status"
+                    >
+                      <RefreshCw className={`h-3 w-3 mr-1 ${portalStatusFetching ? "animate-spin" : ""}`} />
+                      Refresh
+                    </Button>
+                  </div>
+                )}
+                {portalStatus?.error && (
+                  <p className="text-xs text-red-600 dark:text-red-400" data-testid="text-portal-error">
+                    {portalStatus.error}
+                  </p>
+                )}
+                {portalStatus?.verificationErrors?.length ? (
+                  <ul className="text-xs text-muted-foreground list-disc list-inside">
+                    {portalStatus.verificationErrors.map((e, i) => (
+                      <li key={i}>{e}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {portalStatus && !portalStatus.configured && (
+                  <p className="text-xs text-muted-foreground">
+                    Contact Drivorata support to finish enabling <code className="bg-muted px-1 rounded">{portalDomain}</code>.
+                  </p>
+                )}
               </div>
             </CardContent>
           </Card>

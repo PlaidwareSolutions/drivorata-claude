@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import { storage, getRolePriority } from "./storage";
 import { setupAuth, isAuthenticated, registerAuthRoutes } from "./auth";
 import { getClientIp, getRequestBaseUrl, platformBaseUrl } from "./lib/request";
+import { syncPortalHostname } from "./cloudflare/portal-hostnames";
 import { registerObjectStorageRoutes, objectStorage, extractObjectPath } from "./object-storage";
 import {
   insertTenantSchema,
@@ -715,8 +716,19 @@ export async function registerRoutes(
           }
         }
       }
-      const { confirmSlugChange: _confirm, ...updateData } = req.body;
+      const {
+        confirmSlugChange: _confirm,
+        portalHostnameId: _phId,
+        portalHostnameStatus: _phStatus,
+        portalHostnameCheckedAt: _phAt,
+        ...updateData
+      } = req.body;
       const tenant = await storage.updateTenant(id, updateData);
+      if ("customDomain" in updateData || "domainVerified" in updateData) {
+        // Domain changed/cleared/unverified: reconcile the portal hostname
+        // (deletes a stale Cloudflare custom hostname, never throws).
+        await syncPortalHostname(id);
+      }
       res.json(tenant);
     } catch (error) {
       res.status(500).json({ message: "Failed to update tenant" });
@@ -787,7 +799,12 @@ export async function registerRoutes(
             domainVerified: true,
             lastDomainCheck: now,
           });
-        } else {
+        }
+        if (found) {
+          // Verified (now or earlier): make sure portal.<domain> exists in Cloudflare.
+          await syncPortalHostname(id);
+        }
+        if (!(found && !tenant.domainVerified)) {
           await storage.updateTenant(id, {
             lastDomainCheck: now,
           });
@@ -826,6 +843,21 @@ export async function registerRoutes(
       }
     } catch (error) {
       res.status(500).json({ message: "Failed to check DNS status" });
+    }
+  });
+
+  app.get("/api/tenants/:id/domain/portal-status", isAuthenticated, async (req: any, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const member = await storage.getTenantMember(id, req.user.claims.sub);
+      if (!member || !["tenant_admin", "office_manager", "platform_admin"].includes(member.role)) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const state = await syncPortalHostname(id);
+      res.json(state);
+    } catch (error) {
+      console.error("Portal hostname status error:", error);
+      res.status(500).json({ message: "Failed to load portal hostname status" });
     }
   });
 

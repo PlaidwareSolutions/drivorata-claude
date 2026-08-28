@@ -105,6 +105,10 @@ export const tenants = pgTable("tenants", {
   domainVerified: boolean("domain_verified").default(false),
   domainVerificationToken: varchar("domain_verification_token"),
   lastDomainCheck: timestamp("last_domain_check"),
+  // Cloudflare for SaaS custom hostname for the staff portal (portal.<customDomain>)
+  portalHostnameId: varchar("portal_hostname_id"),
+  portalHostnameStatus: varchar("portal_hostname_status"),
+  portalHostnameCheckedAt: timestamp("portal_hostname_checked_at"),
   logoUrl: varchar("logo_url"),
   phone: varchar("phone"),
   email: varchar("email"),

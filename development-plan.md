@@ -264,6 +264,6 @@ This platform combines:
 - Payments + Revenue Engine
 - Multi-Location Management
 
-All under one unified, scalable SaaS architecture built on Replit.
+All under one unified, scalable SaaS architecture hosted on Railway with Cloudflare at the edge.
 
 ---

@@ -436,15 +436,16 @@ function AuthenticatedApp() {
   );
 }
 
+// A "custom domain" is a school's own domain pointed at the app. Everything
+// else — local dev, the Railway-provided hostname, the platform domain and
+// staff-portal subdomains — renders the platform experience.
 function isCustomDomain(): boolean {
-  const hostname = window.location.hostname;
-  if (hostname === "localhost") return false;
-  if (hostname.endsWith(".replit.dev")) return false;
-  if (hostname.endsWith(".replit.app")) return false;
-  if (hostname.endsWith(".repl.co")) return false;
-  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(hostname)) return false;
-  const platformDomain = import.meta.env.VITE_PLATFORM_DOMAIN;
-  if (platformDomain && hostname === platformDomain) return false;
+  const hostname = window.location.hostname.toLowerCase();
+  if (hostname === "localhost" || hostname.endsWith(".localhost")) return false;
+  if (hostname.endsWith(".railway.app")) return false;
+  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(hostname) || hostname.includes(":")) return false;
+  const platformDomain = (import.meta.env.VITE_PLATFORM_DOMAIN || "").toLowerCase();
+  if (platformDomain && (hostname === platformDomain || hostname === `www.${platformDomain}`)) return false;
   if (hostname.startsWith("portal.")) return false;
   return true;
 }

@@ -1466,7 +1466,7 @@ export default function PlatformTenantDetail() {
                   data-testid="input-edit-slug"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Public URL: drivorata.com/site/<strong>{slugEditValue || "your-slug"}</strong>
+                  Public URL: {import.meta.env.VITE_PLATFORM_DOMAIN || "drivorata.com"}/site/<strong>{slugEditValue || "your-slug"}</strong>
                 </p>
                 {slugEditStatus === "checking" && (
                   <p className="text-xs text-muted-foreground flex items-center gap-1" data-testid="text-slug-checking">

@@ -303,7 +303,7 @@ function GeneralTab({ tenantId }: { tenantId: number }) {
                       }}
                     />
                   </FormControl>
-                  <FormDescription>Used in your school's URL (e.g. drivorata.com/site/<strong>{watchedSlug || "your-slug"}</strong>). Only lowercase letters, numbers, and hyphens.</FormDescription>
+                  <FormDescription>Used in your school's URL (e.g. {import.meta.env.VITE_PLATFORM_DOMAIN || "drivorata.com"}/site/<strong>{watchedSlug || "your-slug"}</strong>). Only lowercase letters, numbers, and hyphens.</FormDescription>
                   {slugStatusEl}
                   <div className="rounded-md border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 p-3 mt-1">
                     <p className="text-xs text-blue-800 dark:text-blue-300">

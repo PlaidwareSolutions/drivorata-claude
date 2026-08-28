@@ -2001,7 +2001,7 @@ window.location.href = redirectUrl;`}</pre>
                 <p className="text-sm text-muted-foreground">
                   Use this prompt to build a fully connected, custom-designed
                   school website for a client in about an hour. Paste it into a
-                  new blank Replit project and let the Agent do the work. The
+                  new blank Node.js project with your AI coding assistant and let it do the work. The
                   website will proxy all data through an Express backend (keeping
                   the API key server-side) and display live packages, sessions,
                   locations, and a full enrollment + payment flow.
@@ -2025,15 +2025,16 @@ window.location.href = redirectUrl;`}</pre>
                             once.
                           </li>
                           <li>
-                            Create a new blank Replit project (Node.js /
-                            TypeScript).
+                            Create a new blank Node.js / TypeScript project
+                            (any host works — Railway or Cloudflare Pages are
+                            good fits).
                           </li>
                           <li>
                             In that project's{" "}
                             <strong className="text-amber-800 dark:text-amber-300">
-                              Secrets
-                            </strong>{" "}
-                            panel, add three secrets:
+                              environment variables
+                            </strong>
+                            , add three secrets:
                             <code className="bg-amber-100 dark:bg-amber-900/50 px-1 rounded text-xs ml-1">
                               DRIVORATA_URL
                             </code>
@@ -2077,7 +2078,7 @@ window.location.href = redirectUrl;`}</pre>
               </AccordionTrigger>
               <AccordionContent className="space-y-4 pb-4">
                 <p className="text-sm text-muted-foreground">
-                  Analysis of how the current Replit Autoscale + Neon PostgreSQL architecture holds up at the 10-school target scale. Last reviewed February 2026.
+                  Analysis of how the current Railway (single web service) + Railway PostgreSQL architecture, fronted by Cloudflare, holds up at the 10-school target scale. Last reviewed August 2026.
                 </p>
 
                 <div className="border rounded-lg p-3 space-y-2">
@@ -2141,7 +2142,7 @@ window.location.href = redirectUrl;`}</pre>
                 <div className="border rounded-lg p-3 space-y-2 bg-muted/40">
                   <h4 className="font-medium text-sm">Honest Ceiling</h4>
                   <p className="text-sm text-muted-foreground">
-                    Replit Autoscale + Neon comfortably supports <strong className="text-foreground">50–100 active tenants</strong> with moderate concurrent usage before architectural changes (read replicas, dedicated connection pooler, CDN) become necessary. 10 schools is well inside safe territory with room to grow.
+                    A single Railway web service + Railway Postgres, with Cloudflare caching static assets and uploads at the edge, comfortably supports <strong className="text-foreground">50–100 active tenants</strong> with moderate concurrent usage before architectural changes (more replicas, read replicas, a dedicated connection pooler) become necessary. 10 schools is well inside safe territory with room to grow.
                   </p>
                 </div>
               </AccordionContent>
@@ -2331,7 +2332,7 @@ function AssistedWebsitePrompt() {
   const [copied, setCopied] = useState(false);
   const promptText = `Build a professional, mobile-responsive driving school website that connects to Drivorata (a SaaS backend for driving schools) as its data and payment engine. All school data comes from the Drivorata API; the API key is kept server-side via an Express proxy.
 
-=== ENVIRONMENT VARIABLES (set these as Replit Secrets before starting) ===
+=== ENVIRONMENT VARIABLES (set these as project secrets / environment variables before starting) ===
 - DRIVORATA_URL   — e.g. "https://drivorata.com"
 - SCHOOL_SLUG     — the school's slug in Drivorata, e.g. "sunshine-driving"
 - DRIVORATA_API_KEY — the API key generated in the school's Settings → API Access

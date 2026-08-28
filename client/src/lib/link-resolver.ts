@@ -1,11 +1,5 @@
-const PLATFORM_HOSTNAMES = new Set(
-  [
-    "drivorata.com",
-    "www.drivorata.com",
-    "drivorata.replit.app",
-    import.meta.env.VITE_PLATFORM_DOMAIN,
-  ].filter(Boolean)
-);
+const platformDomain = import.meta.env.VITE_PLATFORM_DOMAIN || "drivorata.com";
+const PLATFORM_HOSTNAMES = new Set([platformDomain, `www.${platformDomain}`]);
 
 export function createLinkResolver(
   isOnCustomDomain: boolean

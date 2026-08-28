@@ -1,8 +1,8 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage, getRolePriority } from "./storage";
-import { setupAuth, isAuthenticated } from "./replit_integrations/auth";
-import { registerAuthRoutes } from "./replit_integrations/auth";
+import { setupAuth, isAuthenticated, registerAuthRoutes } from "./auth";
+import { getClientIp, getRequestBaseUrl, platformBaseUrl } from "./lib/request";
 import { registerObjectStorageRoutes, objectStorage, extractObjectPath } from "./object-storage";
 import {
   insertTenantSchema,
@@ -82,13 +82,11 @@ import {
 } from "./enrollment-pdf";
 import {
   runStaleCreditRemindersForTenant,
-  runStaleCreditRemindersAllTenants,
   sendStaleCreditReminderForEnrollment,
   DEFAULT_INTERVAL_DAYS,
 } from "./stale-credit-reminders";
 import {
   runCartRemindersForTenant,
-  runCartRemindersAllTenants,
   sendCartReminderManual,
   verifyUnsubscribeToken,
   buildResumeUrl,
@@ -210,7 +208,7 @@ export async function registerRoutes(
 
       res.json({
         code: affiliate.code,
-        referralLink: `https://drivorata.com/?ref=${affiliate.code}`,
+        referralLink: `${platformBaseUrl()}/?ref=${affiliate.code}`,
         commissionModel: affiliate.commissionModel,
         tier: affiliate.tier,
         activeSchools: stats.activeSchools,
@@ -4268,11 +4266,10 @@ export async function registerRoutes(
   });
 
   // Per-IP sliding-window rate limit for the public contact form.
-  // IMPORTANT: relies on Express `trust proxy` (set in setupAuth) so that
-  // `req.ip` reflects the real client address from the first trusted hop.
-  // We deliberately do NOT read `x-forwarded-for` ourselves — that header is
-  // user-controllable and would let attackers rotate spoofed values to bypass
-  // the limit.
+  // IMPORTANT: uses getClientIp() (server/lib/request.ts), which derives the
+  // address from the trusted proxy chain. We deliberately do NOT read
+  // `x-forwarded-for` ourselves — that header is user-controllable and would
+  // let attackers rotate spoofed values to bypass the limit.
   const contactSubmitBuckets = new Map<string, number[]>();
   const CONTACT_RATE_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
   const CONTACT_RATE_MAX = 5;
@@ -4307,9 +4304,10 @@ export async function registerRoutes(
       if (!tenant || !tenant.active) {
         return res.status(404).json({ message: "School not found" });
       }
-      // Use req.ip (driven by Express trust-proxy config) so rate limiting
-      // can't be bypassed via a spoofed x-forwarded-for header.
-      const ip = req.ip || "unknown";
+      // getClientIp() is proxy-aware (trust proxy / Railway X-Real-IP / portal
+      // Worker) and never reads a client-controllable header, so the limit
+      // can't be bypassed by spoofing x-forwarded-for.
+      const ip = getClientIp(req);
 
       // Honeypot: if a value was supplied for the hidden field, pretend the
       // submission succeeded but drop it on the floor so bots don't retry.
@@ -5401,7 +5399,7 @@ export async function registerRoutes(
         return res.json({ cashPayment: true, enrollmentId: enrollment.id, paymentId: payment.id });
       }
 
-      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      const baseUrl = getRequestBaseUrl(req);
       const successUrl = externalSuccessUrl
         ? `${externalSuccessUrl}${externalSuccessUrl.includes("?") ? "&" : "?"}enrollment=${enrollment.id}`
         : `${baseUrl}/site/${tenant.slug}/checkout/success?enrollment=${enrollment.id}`;
@@ -6017,7 +6015,7 @@ export async function registerRoutes(
         return res.json({ cashPayment: true, cartId: cart.id, paymentId: payment.id });
       }
 
-      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      const baseUrl = getRequestBaseUrl(req);
       const internalSuccess = `${baseUrl}/site/${tenant.slug}/checkout/success?cart=${cart.id}`;
       const internalCancel = `${baseUrl}/site/${tenant.slug}/cart`;
       const successUrl = externalSuccessUrl
@@ -6341,7 +6339,7 @@ export async function registerRoutes(
         return res.json({ cashPayment: true, enrollmentId: enrollment.id, paymentId: payment.id });
       }
 
-      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      const baseUrl = getRequestBaseUrl(req);
       const successUrl = externalSuccessUrl
         ? `${externalSuccessUrl}${externalSuccessUrl.includes("?") ? "&" : "?"}enrollment=${enrollment.id}`
         : `${baseUrl}/site/${tenant.slug}/checkout/success?enrollment=${enrollment.id}`;
@@ -7584,84 +7582,8 @@ export async function registerRoutes(
     }
   });
 
-  // Background cleanup job (runs every hour)
-  setInterval(async () => {
-    try {
-      const allTenants = await storage.getAllTenants();
-      for (const tenant of allTenants) {
-        const settings = await storage.getTenantPaymentSettings(tenant.id);
-        const autoExpireEnabled = settings?.autoExpireEnabled ?? true;
-        if (!autoExpireEnabled) continue;
-        const hours = settings?.expireAfterHours ?? 2;
-        const stale = await storage.getExpiredPendingEnrollmentsByTenant(tenant.id, hours);
-        for (const enrollment of stale) {
-          await storage.expireEnrollment(enrollment.id, tenant.id);
-        }
-        const abandonedCarts = await storage.expireAbandonedCarts(tenant.id, hours);
-        // Note: auto-cleanup runs without an actor; the audit table requires
-        // actorUserId. We log to stdout instead of writing audit events here.
-        // Manual cleanup (see route above) does emit cart.abandoned audit
-        // events with the admin actor.
-        if (abandonedCarts.length > 0) {
-          console.log(`[Cleanup] Auto: cart.abandoned events:`, abandonedCarts.map(a => a.cartId));
-        }
-        if (stale.length > 0 || abandonedCarts.length > 0) {
-          console.log(`[Cleanup] Auto: Expired ${stale.length} pending enrollments, ${abandonedCarts.length} carts for tenant ${tenant.id}`);
-        }
-      }
-    } catch (error) {
-      console.error("[Cleanup] Background job error:", error);
-    }
-  }, 60 * 60 * 1000);
-
-  // Background stale-credit reminder job. Cadence is configurable via the
-  // STALE_CREDIT_REMINDER_INTERVAL_MINUTES env var (default 60 minutes; set to
-  // 0 or a negative number to disable the scheduler entirely). Tenant-level
-  // dedupe ensures students aren't spammed even when run frequently.
-  const staleCreditCadenceMinutes = Number.parseInt(
-    process.env.STALE_CREDIT_REMINDER_INTERVAL_MINUTES ?? "60",
-    10,
-  );
-  if (Number.isFinite(staleCreditCadenceMinutes) && staleCreditCadenceMinutes > 0) {
-    const intervalMs = staleCreditCadenceMinutes * 60 * 1000;
-    console.log(`[StaleCreditReminders] Scheduler enabled, interval=${staleCreditCadenceMinutes} minute(s)`);
-    setInterval(async () => {
-      try {
-        const result = await runStaleCreditRemindersAllTenants();
-        if (result.totalEmailSent > 0 || result.totalInAppSent > 0 || result.totalFailed > 0) {
-          console.log(`[StaleCreditReminders] Background: tenants=${result.tenantsProcessed} email_sent=${result.totalEmailSent} in_app=${result.totalInAppSent} failed=${result.totalFailed}`);
-        }
-      } catch (error) {
-        console.error("[StaleCreditReminders] Background job error:", error);
-      }
-    }, intervalMs);
-  } else {
-    console.log("[StaleCreditReminders] Scheduler disabled (STALE_CREDIT_REMINDER_INTERVAL_MINUTES <= 0)");
-  }
-
-  // Background cart-reminder job. Cadence configurable via
-  // CART_REMINDER_INTERVAL_MINUTES (default 60; <=0 disables).
-  const cartReminderCadenceMinutes = Number.parseInt(
-    process.env.CART_REMINDER_INTERVAL_MINUTES ?? "60",
-    10,
-  );
-  if (Number.isFinite(cartReminderCadenceMinutes) && cartReminderCadenceMinutes > 0) {
-    const intervalMs = cartReminderCadenceMinutes * 60 * 1000;
-    console.log(`[CartReminders] Scheduler enabled, interval=${cartReminderCadenceMinutes} minute(s)`);
-    setInterval(async () => {
-      try {
-        const r = await runCartRemindersAllTenants();
-        if (r.totalAbandoned > 0 || r.totalPendingCash > 0 || r.totalFailed > 0) {
-          console.log(`[CartReminders] Background: tenants=${r.tenantsProcessed} abandoned=${r.totalAbandoned} pending_cash=${r.totalPendingCash} failed=${r.totalFailed}`);
-        }
-      } catch (error) {
-        console.error("[CartReminders] Background job error:", error);
-      }
-    }, intervalMs);
-  } else {
-    console.log("[CartReminders] Scheduler disabled (CART_REMINDER_INTERVAL_MINUTES <= 0)");
-  }
-
+  // Background jobs (expiry cleanup, reminders) live in server/jobs/scheduler.ts
+  // and are started from server/index.ts, not from registerRoutes().
   // ===== PUBLIC PAYMENT CONFIG (for checkout form) =====
 
   app.get("/api/public/tenant/:slug/payment-methods", requireApiKey, async (req, res) => {
@@ -8580,7 +8502,7 @@ export async function registerRoutes(
     try {
       const tenant = await storage.getTenantBySlug(req.params.slug);
       if (!tenant || !tenant.active) return res.status(404).json({ message: "School not found" });
-      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
+      const ip = getClientIp(req);
       if (!rateLimitTestimonialSubmit(ip)) {
         return res.status(429).json({ message: "Too many submissions. Please try again later." });
       }

@@ -9,31 +9,65 @@ declare module "express-session" {
   }
 }
 
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 1 week
+
+function requireSessionSecret(): string {
+  const secret = process.env.SESSION_SECRET?.trim();
+  if (!secret) {
+    throw new Error(
+      "SESSION_SECRET is not set. It signs session cookies and unsubscribe/reply tokens; " +
+        "use the same value across deploys so existing sessions and links stay valid.",
+    );
+  }
+  return secret;
+}
+
+/**
+ * Express `trust proxy` setting. Railway's edge is one hop (default `1`).
+ * Accepts a hop count, `true`/`false`, or a comma-separated list of
+ * addresses / CIDRs (e.g. `loopback, 100.0.0.0/8`).
+ */
+export function parseTrustProxy(raw: string | undefined): boolean | number | string {
+  const v = (raw ?? "").trim();
+  if (v === "") return 1;
+  if (v === "true") return true;
+  if (v === "false") return false;
+  if (/^\d+$/.test(v)) return parseInt(v, 10);
+  return v;
+}
+
+/** Secure cookies in production (HTTPS terminated at the edge); override with COOKIE_SECURE. */
+export function cookieSecure(): boolean {
+  const raw = process.env.COOKIE_SECURE?.trim().toLowerCase();
+  if (raw === "true" || raw === "1") return true;
+  if (raw === "false" || raw === "0") return false;
+  return process.env.NODE_ENV === "production";
+}
+
 export function getSession() {
-  const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
   const pgStore = connectPg(session);
   const sessionStore = new pgStore({
     conString: process.env.DATABASE_URL,
-    createTableIfMissing: false,
-    ttl: sessionTtl,
+    createTableIfMissing: false, // `sessions` is part of the Drizzle schema/migrations
+    ttl: SESSION_TTL_MS,
     tableName: "sessions",
   });
   return session({
-    secret: process.env.SESSION_SECRET!,
+    secret: requireSessionSecret(),
     store: sessionStore,
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production" || process.env.REPL_ID !== undefined,
+      secure: cookieSecure(),
       sameSite: "lax",
-      maxAge: sessionTtl,
+      maxAge: SESSION_TTL_MS,
     },
   });
 }
 
 export async function setupAuth(app: Express) {
-  app.set("trust proxy", 1);
+  app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY));
 
   if (process.env.TEST_AUTH_BYPASS === "1" && process.env.NODE_ENV === "test") {
     app.use((req: any, _res, next) => {

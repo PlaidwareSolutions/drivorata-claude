@@ -1,11 +1,11 @@
 import type { Express } from "express";
 import { authStorage } from "./storage";
-import { isAuthenticated } from "./replitAuth";
-import { storage } from "../../storage";
+import { isAuthenticated } from "./session";
+import { storage } from "../storage";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import crypto from "crypto";
-import { db } from "../../db";
+import { db } from "../db";
 import { passwordResetTokens } from "@shared/schema";
 import { eq, and, gt } from "drizzle-orm";
 

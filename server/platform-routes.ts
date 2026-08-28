@@ -1,5 +1,6 @@
 import type { Express, Request, Response, NextFunction } from "express";
-import { isAuthenticated } from "./replit_integrations/auth";
+import { isAuthenticated } from "./auth";
+import { getClientIp } from "./lib/request";
 import { db } from "./db";
 import { platformMembers, tenants, tenantMembers, users, enrollments, locations, payments, leads, leadNotes, insertLeadSchema, passwordResetTokens, supportTickets, affiliates, affiliateReferrals, affiliateCommissions, platformPlans, tenantInvoices } from "@shared/schema";
 import { applyDemoData, purgePreviewData } from "./demo-data";
@@ -430,7 +431,7 @@ export function registerPlatformRoutes(app: Express): void {
 
   app.post("/api/leads", async (req: any, res) => {
     try {
-      const ip = req.ip || req.connection.remoteAddress || "unknown";
+      const ip = getClientIp(req);
       const now = Date.now();
       const windowMs = 15 * 60 * 1000;
       const maxRequests = 5;

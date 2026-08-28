@@ -118,8 +118,8 @@ test("per-IP rate limit returns 429 after 5 submissions in the window", async ()
 });
 
 test("rate limit uses req.ip — when no trusted proxy is set, x-forwarded-for is ignored", async () => {
-  // Production runs behind Replit's proxy with `trust proxy: 1`, so the
-  // proxy's rewritten X-Forwarded-For becomes req.ip (the real client IP).
+  // Production runs behind Railway's edge proxy with `trust proxy: 1`, so the
+  // proxy's sanitised X-Forwarded-For becomes req.ip (the real client IP).
   // To prove the handler doesn't read the raw header itself, spin up a
   // second app where trust proxy is disabled. Spoofed XFF values must NOT
   // change req.ip in this configuration, so all requests from loopback

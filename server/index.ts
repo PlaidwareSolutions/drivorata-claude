@@ -7,6 +7,7 @@ import { seedPromotions } from "./seed-promotions";
 import { seedOnlineCourses } from "./seed-online-courses";
 import { storage } from "./storage";
 import { pool } from "./db";
+import { startBackgroundJobs, stopBackgroundJobs } from "./jobs/scheduler";
 
 const app = express();
 
@@ -96,6 +97,7 @@ function bootSeedTenantIds(): number[] {
 
 (async () => {
   await registerRoutes(httpServer, app);
+  startBackgroundJobs();
   for (const tenantId of bootSeedTenantIds()) {
     seedPromotions(tenantId).catch((err) => console.error(`Failed to seed promotions for tenant ${tenantId}:`, err));
     seedOnlineCourses(tenantId).catch((err) => console.error(`Failed to seed online courses for tenant ${tenantId}:`, err));
@@ -143,6 +145,7 @@ function bootSeedTenantIds(): number[] {
     if (shuttingDown) return;
     shuttingDown = true;
     log(`${signal} received, shutting down`);
+    stopBackgroundJobs();
     const forceExit = setTimeout(() => process.exit(1), 10_000);
     forceExit.unref();
     httpServer.close(() => {

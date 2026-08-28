@@ -1,6 +1,6 @@
 import { users, type User, type UpsertUser } from "@shared/models/auth";
 import { tenantMembers, enrollments, instructorAvailability, scheduleSessions, bookings, media, auditEvents } from "@shared/schema";
-import { db } from "../../db";
+import { db } from "../db";
 import { eq, and } from "drizzle-orm";
 
 export interface IAuthStorage {

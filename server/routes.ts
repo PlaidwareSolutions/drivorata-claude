@@ -716,15 +716,32 @@ export async function registerRoutes(
           }
         }
       }
+      // Domain verification state is server-controlled. It is only ever set by
+      // POST /domain/check after a successful DNS TXT lookup, because it now
+      // drives Cloudflare custom-hostname creation — a tenant admin who could
+      // PATCH `domainVerified: true` with an arbitrary `customDomain` could make
+      // the platform request certificates for a domain they do not own.
       const {
         confirmSlugChange: _confirm,
         portalHostnameId: _phId,
         portalHostnameStatus: _phStatus,
         portalHostnameCheckedAt: _phAt,
+        domainVerified: _dv,
+        domainVerificationToken: _dvt,
+        lastDomainCheck: _ldc,
         ...updateData
       } = req.body;
+      const current = await storage.getTenant(id);
+      const domainChanged =
+        "customDomain" in updateData &&
+        (updateData.customDomain || null) !== (current?.customDomain || null);
+      if (domainChanged) {
+        // A new (or cleared) domain is unverified until re-checked.
+        (updateData as Record<string, unknown>).domainVerified = false;
+        (updateData as Record<string, unknown>).domainVerificationToken = null;
+      }
       const tenant = await storage.updateTenant(id, updateData);
-      if ("customDomain" in updateData || "domainVerified" in updateData) {
+      if (domainChanged) {
         // Domain changed/cleared/unverified: reconcile the portal hostname
         // (deletes a stale Cloudflare custom hostname, never throws).
         await syncPortalHostname(id);

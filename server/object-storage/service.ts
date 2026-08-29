@@ -41,6 +41,16 @@ const OBJECT_PATH_PREFIX = "/objects/";
 const UPLOAD_KEY_PREFIX = "uploads/";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Content types safe to serve inline from our own origin (see routes.ts). */
+export const SERVABLE_CONTENT_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "image/avif",
+  "application/pdf",
+]);
+
 export const UPLOAD_URL_TTL_SECONDS = 15 * 60;
 /** Uploaded objects are immutable (UUID keys), so they can be cached for a year. */
 export const OBJECT_CACHE_CONTROL = "public, max-age=31536000, immutable";
@@ -162,10 +172,20 @@ export class ObjectStorageService {
       if (isNotFound(err)) throw new ObjectNotFoundError();
       throw err;
     }
+    // Defence in depth against stored XSS: never let an object dictate an
+    // active content type on our own origin. Anything outside the upload
+    // allow-list (including objects stored before that rule existed, e.g.
+    // migrated from the previous provider) is served as an opaque download.
+    const storedType = (out.ContentType || "").toLowerCase().split(";")[0].trim();
+    const safeType = SERVABLE_CONTENT_TYPES.has(storedType) ? storedType : "application/octet-stream";
     res.set({
-      "Content-Type": out.ContentType || "application/octet-stream",
+      "Content-Type": safeType,
       "Cache-Control": OBJECT_CACHE_CONTROL,
+      "X-Content-Type-Options": "nosniff",
     });
+    if (safeType === "application/octet-stream") {
+      res.set("Content-Disposition", "attachment");
+    }
     if (typeof out.ContentLength === "number") res.set("Content-Length", String(out.ContentLength));
     if (out.ETag) res.set("ETag", out.ETag);
     if (out.LastModified) res.set("Last-Modified", out.LastModified.toUTCString());

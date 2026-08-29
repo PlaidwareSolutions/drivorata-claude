@@ -1,8 +1,9 @@
 [
   {
-    "AllowedOrigins": ["https://drivorata.com", "https://www.drivorata.com", "http://localhost:5000"],
-    "AllowedMethods": ["PUT", "GET", "HEAD"],
-    "AllowedHeaders": ["Content-Type"],
+    "_comment": "AllowedOrigins is '*' by necessity: the admin UI that performs uploads is served from the platform domain AND from every tenant's own portal.<their-domain> hostname, which are arbitrary customer domains that cannot be enumerated ahead of time. This is not the security boundary - the presigned PUT URL is. It is issued only to an authenticated admin (POST /api/uploads/request-url requires a session), expires in 15 minutes, is bound to a single object key, and is bound to an allow-listed Content-Type. CORS here only governs which page may initiate the browser PUT.",
+    "AllowedOrigins": ["*"],
+    "AllowedMethods": ["PUT", "HEAD"],
+    "AllowedHeaders": ["content-type"],
     "ExposeHeaders": ["ETag"],
     "MaxAgeSeconds": 3600
   }

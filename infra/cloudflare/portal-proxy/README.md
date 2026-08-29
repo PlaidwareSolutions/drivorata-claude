@@ -20,6 +20,32 @@ while forwarding the original host and visitor IP to the app.
 5. Create an API token (Zone → SSL and Certificates → Edit) for the app's
    `CLOUDFLARE_API_TOKEN`; note the zone id for `CLOUDFLARE_ZONE_ID`.
 
+## Prerequisite: Cloudflare for SaaS must be enabled
+
+Until the zone has the Cloudflare for SaaS entitlement, two things fail with
+misleading errors:
+
+| Symptom | Real cause |
+|---|---|
+| `POST /zones/{id}/custom_hostnames` → `1404 No quota has been allocated for this zone` | SaaS not enabled |
+| `wrangler deploy` → `Some triggers failed to deploy` (script uploads, route does not) | the `*/*` route pattern requires SaaS |
+
+Enable it at **SSL/TLS → Custom Hostnames → Enable Cloudflare for SaaS**
+(100 hostnames are included on Free/Pro/Business), then set the fallback origin
+to `saas.drivorata.com`.
+
+### Validating before the entitlement exists
+
+Deploy with a concrete hostname pattern instead of `*/*` and point a proxied
+test record at it — this exercises the identical code path:
+
+```sh
+# temporary: a proxied AAAA 100:: record named portal-test
+routes = [{ pattern = "portal-test.drivorata.com/*", zone_name = "drivorata.com" }]
+```
+
+Remove the test record and restore `*/*` once SaaS is on.
+
 ## Deploy
 
 ```sh

@@ -8,14 +8,23 @@
 # Deploy:  cd infra/cloudflare/portal-proxy && npx wrangler deploy
 # Secret:  npx wrangler secret put PORTAL_PROXY_SECRET   (same value as the app's env)
 name = "drivorata-portal-proxy"
+account_id = "db356ac44b40bc2b194b6838d03eb84b"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
 
 # `*/*` is the only pattern that also matches Cloudflare for SaaS custom
-# hostnames. Platform hostnames get explicit "no Worker" routes in the
-# dashboard (Workers Routes → add route → Worker: None) so they skip this hop:
-#   drivorata.com/*   -> None
-#   www.drivorata.com/* -> None
+# hostnames (they are not records in this zone).
+#
+# PREREQUISITE: Cloudflare for SaaS must be enabled on the zone first. Without it
+# the API rejects this pattern and `wrangler deploy` reports
+# "Some triggers failed to deploy" while still uploading the script. A concrete
+# hostname pattern deploys fine, which is how you can validate the Worker before
+# the entitlement is granted (see README).
+#
+# After enabling, also add explicit "no Worker" routes in the dashboard so
+# platform traffic skips this hop (and does not burn Workers quota):
+#   drivorata.com/*     -> Worker: None
+#   www.drivorata.com/* -> Worker: None
 routes = [
   { pattern = "*/*", zone_name = "drivorata.com" },
 ]
@@ -23,6 +32,9 @@ routes = [
 [vars]
 # Railway-provided service hostname (Settings → Networking). Not a custom domain.
 ORIGIN_HOST = "drivorata-production.up.railway.app"
-# Comma-separated hostnames (or .suffixes) that must never be proxied; they are
-# served directly by Railway via their own DNS records.
-PLATFORM_HOSTS = "drivorata.com,www.drivorata.com,.drivorata.com"
+# Comma-separated hostnames (a leading "." matches any subdomain) that must NOT
+# be re-addressed; they reach Railway directly via their own DNS records.
+# Deliberately NOT ".drivorata.com" — the SaaS fallback origin (saas.drivorata.com)
+# is an originless 100:: record, so passthrough there would black-hole the request.
+# Everything that is not a platform host is treated as a tenant portal hostname.
+PLATFORM_HOSTS = "drivorata.com,www.drivorata.com"

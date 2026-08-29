@@ -1189,7 +1189,9 @@ export async function clearDemoTenant(opts: { tenantId: number }): Promise<Clear
     bump("schedule_offerings", true);
   }
 
-  // 3. Packages — skip any that real enrollments reference.
+  // 3. Packages — skip any that real enrollments reference, and any still
+  // referenced by an offering that was kept above (schedule_offerings.package_id
+  // is ON DELETE RESTRICT, so deleting such a package would fail).
   const expectedPackageNames = new Set(PACKAGE_SEEDS.map((p) => p.name));
   const pkgRows = await db
     .select({ id: packages.id, name: packages.name })
@@ -1202,6 +1204,14 @@ export async function clearDemoTenant(opts: { tenantId: number }): Promise<Clear
       .from(enrollments)
       .where(eq(enrollments.packageId, p.id));
     if (enrollmentCount > 0) {
+      bump("packages", false);
+      continue;
+    }
+    const [{ count: offeringCount }] = await db
+      .select({ count: count() })
+      .from(scheduleOfferings)
+      .where(eq(scheduleOfferings.packageId, p.id));
+    if (offeringCount > 0) {
       bump("packages", false);
       continue;
     }

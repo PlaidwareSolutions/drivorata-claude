@@ -35,6 +35,16 @@ DATABASE_URL="$RAILWAY_URL" SOURCE_OBJECTS_BASE_URL=https://drivorata.com \
 Verify on the Railway URL: package images and logos render; a fresh upload round-trips; a PDF with a logo renders.
 
 ## 2. Cutover (write freeze ~15–30 min)
+
+> **BLOCKING PRE-FLIGHT — `SESSION_SECRET`.** The service is provisioned with a
+> placeholder value (`PLACEHOLDER-REPLACE-WITH-REPLIT-SESSION_SECRET-BEFORE-CUTOVER-…`)
+> so the pipeline could be validated before the real secret was available.
+> Replace it with the exact Replit value **before** the DNS flip. If you don't:
+> every signed-in staff session is invalidated, and every previously emailed
+> unsubscribe link and contact-reply token stops validating.
+> Check with: `railway variables --service drivorata --kv | grep '^SESSION_SECRET='`
+> — if it still starts with `PLACEHOLDER-`, stop.
+
 1. Announce the freeze; on Replit, stop the deployment (or set `CART_REMINDER_INTERVAL_MINUTES=0` / `STALE_CREDIT_REMINDER_INTERVAL_MINUTES=0` and leave it read-only).
 2. Final `pg_dump` → `pg_restore --clean --if-exists` into Railway → `mark-baseline-applied` → trigger a Railway redeploy (migrations apply) → smoke test.
 3. Re-run `migrate-objects-to-r2.ts` for deltas.

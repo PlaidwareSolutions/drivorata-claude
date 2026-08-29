@@ -17,7 +17,13 @@ Railway pre-deploy: node dist/migrate.cjs
    - Replicas: 1 (background jobs are lock-guarded, so more is safe later).
 3. Variables — see the table below. `VITE_PLATFORM_DOMAIN` is consumed at **build time** (Docker `ARG`), so set it before the first build.
 4. Public networking: add custom domains `drivorata.com` and `www.drivorata.com`; create the CNAME + `_railway-verify` TXT records Railway shows (in Cloudflare, **proxied** on). Note the Railway-provided `*.up.railway.app` hostname — the Worker uses it as `ORIGIN_HOST`.
-5. Optional: manage all of the above from `.railway/railway.ts` with `railway config plan` / `railway config apply` (secrets stay in the dashboard).
+5. Optional: manage build/deploy settings and variables from `.railway/railway.ts` with `railway config plan` / `railway config apply` (secrets stay in the dashboard).
+
+> **Two constraints learned the hard way — always run `railway config plan` and read it before `apply`:**
+> - **Custom domains cannot be declared in the config file.** Railway rejects them (`Custom-domain registration is not supported by Railway configuration`). Add them with `railway domain <name>` or the dashboard.
+> - **Resource names in the config must match Railway exactly, including case.** The CLI creates the database service as `Postgres`; a config declaring `postgres("postgres")` plans to *destroy and recreate the database*. The plan says `1 to destroy` — never apply that.
+
+> **Postgres version:** Railway provisions **PG 18**. Dump/restore between the old database and Railway must use client tools at least as new as the newer server, so install PG 18 client tools (`brew install postgresql@18`) before the rehearsal rather than relying on an older local `pg_dump`/`pg_restore`.
 
 ### Environment variables
 

@@ -14,7 +14,9 @@ import { defineRailway, github, postgres, project, service } from "railway/iac";
 const secret = (description: string) => ({ description, preserveExisting: true });
 
 export default defineRailway(() => {
-  const db = postgres("postgres");
+  // Name must match the Railway service exactly, or config apply proposes
+  // destroying and recreating the database.
+  const db = postgres("Postgres");
 
   const web = service("drivorata", {
     source: github("PlaidwareSolutions/drivorata-claude", { branch: "main" }),
@@ -32,7 +34,9 @@ export default defineRailway(() => {
       restartPolicyMaxRetries: 5,
       drainingSeconds: 15,
     },
-    domains: ["drivorata.com", "www.drivorata.com"],
+    // Custom domains are NOT managed here — Railway config rejects them.
+    // Add them with `railway domain <name>` (or the dashboard), then create the
+    // CNAME + _railway-verify TXT records it prints. See docs/DEPLOYMENT.md §1.4.
     env: {
       NODE_ENV: "production",
       DATABASE_URL: db.env.DATABASE_URL,

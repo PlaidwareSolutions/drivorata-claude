@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "replatform/**"]
+  pull_request:
+
+jobs:
+  test:
+    name: Type-check, build, migrate, test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: drivorata
+          POSTGRES_PASSWORD: drivorata
+          POSTGRES_DB: drivorata_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U drivorata"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://drivorata:drivorata@localhost:5432/drivorata_test
+      VITE_PLATFORM_DOMAIN: drivorata.com
+      SESSION_SECRET: ci-test-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+      - run: npm run db:migrate
+      - run: npm test
+
+  docker:
+    name: Docker image builds and boots
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --build-arg VITE_PLATFORM_DOMAIN=drivorata.com -t drivorata:ci .
+      - name: Boot the image and probe /api/health
+        run: |
+          docker run -d --name drivorata -p 5000:5000 \
+            -e DATABASE_URL=postgresql://nobody:nobody@127.0.0.1:1/none \
+            -e SESSION_SECRET=ci -e BACKGROUND_JOBS_ENABLED=0 drivorata:ci
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5000/api/health || true)
+            # 503 = app up, DB (intentionally) unreachable
+            if [ "$code" = "503" ] || [ "$code" = "200" ]; then echo "health: $code"; exit 0; fi
+            sleep 1
+          done
+          docker logs drivorata; exit 1

@@ -1,0 +1,50 @@
+[data-ui-context="platform"] {
+  --primary: 239 84% 67%;
+  --primary-foreground: 0 0% 100%;
+  --accent: 173 58% 39%;
+  --accent-foreground: 0 0% 100%;
+  --sidebar: 240 20% 97%;
+  --sidebar-foreground: 222 47% 11%;
+  --sidebar-primary: 239 84% 67%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 240 20% 93%;
+  --sidebar-accent-foreground: 222 47% 11%;
+  --sidebar-ring: 239 84% 67%;
+  --ring: 239 84% 67%;
+  --chart-1: 239 84% 67%;
+  --chart-2: 173 58% 39%;
+  --chart-3: 262 52% 55%;
+  --chart-4: 199 89% 48%;
+  --chart-5: 326 78% 60%;
+
+  --primary-border: hsl(var(--primary));
+  --primary-border: hsl(from hsl(var(--primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --sidebar-primary-border: hsl(var(--sidebar-primary));
+  --sidebar-primary-border: hsl(from hsl(var(--sidebar-primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+}
+
+.dark[data-ui-context="platform"],
+.dark [data-ui-context="platform"] {
+  --primary: 239 84% 67%;
+  --primary-foreground: 0 0% 100%;
+  --accent: 173 58% 39%;
+  --accent-foreground: 0 0% 100%;
+  --sidebar: 240 20% 8%;
+  --sidebar-foreground: 210 40% 98%;
+  --sidebar-primary: 239 84% 67%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 240 20% 14%;
+  --sidebar-accent-foreground: 210 40% 98%;
+  --sidebar-ring: 239 84% 67%;
+  --ring: 239 84% 67%;
+  --chart-1: 239 84% 67%;
+  --chart-2: 173 58% 45%;
+  --chart-3: 262 52% 60%;
+  --chart-4: 199 89% 55%;
+  --chart-5: 326 78% 65%;
+
+  --primary-border: hsl(var(--primary));
+  --primary-border: hsl(from hsl(var(--primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --sidebar-primary-border: hsl(var(--sidebar-primary));
+  --sidebar-primary-border: hsl(from hsl(var(--sidebar-primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+}

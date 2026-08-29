@@ -1,6 +1,5 @@
 import { storage } from "../storage";
-import { db } from "../db";
-import { sql } from "drizzle-orm";
+import { db, pool } from "../db";
 import type { Enrollment, Payment } from "@shared/schema";
 import { sendPaymentReceived, fireAndForget } from "../enrollment-emails";
 import { sendAdminEnrollmentNotification } from "../admin-enrollment-notifications";
@@ -80,12 +79,20 @@ export async function activateCart(paymentId: number): Promise<CartActivationRes
   // Serialize concurrent activation attempts for the same cart with a
   // Postgres advisory lock. This prevents two simultaneous webhook deliveries
   // (or admin confirms) from racing past the "no enrollments yet" check and
-  // both creating duplicate enrollments. The lock is auto-released when this
-  // session disconnects, but we explicitly release in finally for clarity.
+  // both creating duplicate enrollments.
+  //
+  // The lock MUST be taken on a single pinned connection. Advisory locks are
+  // session-scoped, and `db.execute()` runs on an arbitrary connection from the
+  // pool — so lock and unlock could land on different sessions, making the lock
+  // grant no mutual exclusion at all (and leaking the held lock until its
+  // connection happened to be recycled). Only the lock/unlock pair needs to be
+  // pinned; the work inside may use the pool normally, since what matters is
+  // that the lock is *held* for the duration.
   const lockKey = cartLockKey(cartId);
-  await db.execute(sql`SELECT pg_advisory_lock(${lockKey})`);
+  const lockClient = await pool.connect();
   let cartEnrollments: Enrollment[];
   try {
+    await lockClient.query("SELECT pg_advisory_lock($1)", [lockKey]);
     // Idempotency: if enrollments already exist for this cart, skip the
     // create+book step (this is a webhook re-delivery / retry).
     cartEnrollments = await storage.getEnrollmentsByCart(cartId);
@@ -115,7 +122,10 @@ export async function activateCart(paymentId: number): Promise<CartActivationRes
       }
     }
   } finally {
-    await db.execute(sql`SELECT pg_advisory_unlock(${lockKey})`).catch(() => {});
+    await lockClient
+      .query("SELECT pg_advisory_unlock($1)", [lockKey])
+      .catch(() => {})
+      .finally(() => lockClient.release());
   }
 
   // Now run the per-enrollment side-effects (user creation, roles, credits,

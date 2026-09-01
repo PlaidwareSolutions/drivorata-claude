@@ -176,7 +176,15 @@ pre-cutover capture byte for byte.
 - For each school with a verified custom domain: open Admin → Custom Domain, confirm the portal hostname shows **active**, and send them the new `CNAME portal → saas.drivorata.com` record (replaces the old A record).
 - Delete the temporary `portal-test.drivorata.com` record and restore the Worker's `*/*` route.
 - **Rotate the Cloudflare provisioning API token** and delete `.env.provisioning`.
-- Decommission Replit: object storage bucket, database, secrets.
+- ⚠️ **DO NOT decommission Replit until the storefront is dealt with.** The tenant
+  storefront is a *separate Replit deployment*, not part of this repo.
+  `allagesdrivingschool.com` resolves to the same Replit edge IP as `drivorata.com`
+  (34.111.179.208) but is routed by Host to a different app: it serves the school's
+  public site and answers `/api/public/me` with **200** (its own Express proxy holding
+  the API key server-side), where the backend answers 401. Shutting Replit down takes
+  the live storefront of the only tenant with real enrollments offline. Migrating or
+  re-hosting that app is separate work.
+- Then decommission Replit: object storage bucket, database, secrets.
 
 ## Rollback
 DNS back to Replit; restart the Replit deployment. Data written on Railway after the freeze would need to be replayed by hand, which is why the freeze exists.

@@ -100,8 +100,11 @@ $PGBIN/pg_dump --format=custom --no-owner --no-privileges "$NEON_URL" -f prod.du
 # 2. Restore into Railway Postgres
 $PGBIN/pg_restore --no-owner --no-privileges --clean --if-exists -d "$RAILWAY_URL" prod.dump
 
-# 3. Reset the migration ledger (see the warning above — REQUIRED)
+# 3. Reset the migration ledger (see the warning above — REQUIRED), and drop the
+#    Replit bookkeeping schema the dump carries with it (_system.replit_database_
+#    migrations_v1 — Replit deployment tooling, unreferenced by the app).
 $PGBIN/psql "$RAILWAY_URL" -c 'DROP SCHEMA IF EXISTS drizzle CASCADE'
+$PGBIN/psql "$RAILWAY_URL" -c 'DROP SCHEMA IF EXISTS _system CASCADE'
 
 # 4. Record the baseline so the migrator starts at 0001
 DATABASE_URL="$RAILWAY_URL" npx tsx scripts/mark-baseline-applied.ts
@@ -151,7 +154,8 @@ pre-cutover capture byte for byte.
    objects from the running Replit deployment, so it cannot run once that is down.
    Run it last thing before the freeze, and again only if Replit is still serving.
 3. Final `pg_dump` → `pg_restore --clean --if-exists` →
-   **`psql -c 'DROP SCHEMA IF EXISTS drizzle CASCADE'`** → `mark-baseline-applied`
+   **`psql -c 'DROP SCHEMA IF EXISTS drizzle CASCADE'`** and
+   **`psql -c 'DROP SCHEMA IF EXISTS _system CASCADE'`** → `mark-baseline-applied`
    → redeploy (pre-deploy migrates and verifies) → `npm run db:drift` → smoke test.
 4. Re-enable background jobs: `railway variables --service drivorata --set BACKGROUND_JOBS_ENABLED=1`.
 5. Cloudflare DNS — **the actual cutover step**: replace the apex `A 34.111.179.208`

@@ -44,19 +44,28 @@ export default defineRailway(() => {
       VITE_PLATFORM_DOMAIN: "drivorata.com", // build-time (Docker ARG)
       TRUST_PROXY: "1",
       CLIENT_IP_HEADER: "x-real-ip",
-      BACKGROUND_JOBS_ENABLED: "1",
+      // NOT a literal: during a rehearsal this is set to "0" so reminder jobs cannot
+      // email real customers from restored production data. A literal here would let
+      // `railway config apply` silently re-enable them mid-rehearsal. Operator-controlled;
+      // set back to "1" at cutover (see docs/MIGRATION-RUNBOOK.md §2).
+      BACKGROUND_JOBS_ENABLED: { description: "1 = run reminder/cleanup jobs; 0 during rehearsal", preserveExisting: true },
       STALE_CREDIT_REMINDER_INTERVAL_MINUTES: "60",
       CART_REMINDER_INTERVAL_MINUTES: "60",
       PORTAL_CNAME_TARGET: "saas.drivorata.com",
       R2_BUCKET: "drivorata-uploads",
-      SESSION_EMAIL_FROM: "no-reply@drivorata.com",
+      // Must be an address on a domain VERIFIED IN RESEND. drivorata.com is not
+      // verified there; production sends from contact.plaidware.com. Getting this
+      // wrong makes every outgoing email fail with a provider error.
+      SESSION_EMAIL_FROM: "Drivorata <no-reply@contact.plaidware.com>",
       // ---- secrets (set in the dashboard) ----
       SESSION_SECRET: secret("Signs sessions and unsubscribe/reply tokens — copy the exact value from Replit"),
       UNSUBSCRIBE_SECRET: secret("Copy from Replit"),
       RESEND_API_KEY: secret("Resend API key"),
       RESEND_WEBHOOK_SECRET: secret("Resend webhook signing secret"),
       INBOUND_WEBHOOK_SECRET: secret("Resend inbound webhook secret"),
-      INBOUND_REPLY_DOMAIN: secret("Inbound reply domain (e.g. reply.drivorata.com)"),
+      // Intentionally optional: when unset, buildReplyToAddress() derives the domain
+      // from SESSION_EMAIL_FROM (contact.plaidware.com), which is what production does.
+      INBOUND_REPLY_DOMAIN: { description: "Overrides the reply+<token>@ domain; defaults to the SESSION_EMAIL_FROM domain", isOptional: true, preserveExisting: true },
       R2_ACCOUNT_ID: secret("Cloudflare account id"),
       R2_ACCESS_KEY_ID: secret("R2 API token access key"),
       R2_SECRET_ACCESS_KEY: secret("R2 API token secret"),

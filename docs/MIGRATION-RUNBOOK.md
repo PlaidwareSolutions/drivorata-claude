@@ -170,6 +170,35 @@ pre-cutover capture byte for byte.
    a real key, Stripe test checkout, one email send, job log lines (`[Jobs]`).
 7. Lift the freeze.
 
+## Tenant domain corrections (applied to production 2026-09-01)
+
+Two tenant records carried domains that are not theirs. Corrected directly in
+production so the change flows through the final dump:
+
+| Tenant | Was | Now |
+|---|---|---|
+| 1 — TEST ONLY | `www.nawazcoded.me` (verified) | *(none)* |
+| 28 — All Ages Driving School | `www.teslamodcenter.com` (verified) | `allagesdrivingschool.com`, **unverified** |
+
+`domain_verified` was deliberately **not** carried over: `allagesdrivingschool.com`
+has no `driveSchool-verify` TXT record, and a verified domain now drives Cloudflare
+custom-hostname and certificate creation. Rollback snapshot of the previous values
+was taken before the change.
+
+**Follow-up required:** tenant 28 must re-verify in **Admin → Custom Domain**
+(generate token → add the TXT → Check DNS). Until then:
+- `GET /api/public/resolve?hostname=allagesdrivingschool.com` returns tenant **30**
+  (an empty duplicate whose slug happens to be `allagesdrivingschool`), because
+  domain matching requires `domain_verified = true` and otherwise falls back to
+  matching the first DNS label against slugs. Verification fixes this — the domain
+  match is checked first.
+- Cart-reminder resume links use `{APP_BASE_URL}/site/{slug}` rather than the
+  custom domain.
+
+Tenants 29, 30 and 31 are empty duplicates (0 enrollments, 0 payments). Worth
+deleting once confirmed unwanted; tenant 30 in particular shadows the real
+tenant's domain resolution as described above.
+
 ## 3. After cutover
 - Keep the Replit deployment stopped but intact for a rollback window (repoint DNS back to roll back).
 - Re-run `migrate-objects-to-r2.ts` once more after a day (catches anything uploaded during the freeze window).

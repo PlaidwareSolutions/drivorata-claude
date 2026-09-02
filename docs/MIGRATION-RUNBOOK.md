@@ -208,11 +208,25 @@ tenant's domain resolution as described above.
 - ⚠️ **DO NOT decommission Replit until the storefront is dealt with.** The tenant
   storefront is a *separate Replit deployment*, not part of this repo.
   `allagesdrivingschool.com` resolves to the same Replit edge IP as `drivorata.com`
-  (34.111.179.208) but is routed by Host to a different app: it serves the school's
-  public site and answers `/api/public/me` with **200** (its own Express proxy holding
-  the API key server-side), where the backend answers 401. Shutting Replit down takes
-  the live storefront of the only tenant with real enrollments offline. Migrating or
+  (34.111.179.208) but Replit routes by Host to a different deployment.
+
+  Verify by **content type**, not status code — every unknown path returns 200 via the
+  SPA `index.html` fallback on both hosts, so status codes prove nothing:
+
+  | route | `drivorata.com` (backend) | `allagesdrivingschool.com` |
+  |---|---|---|
+  | `/api/docs.json` | `application/json` | `text/html` (SPA fallback) |
+  | `/api/headless-guide.md` | `text/markdown` | `text/html` |
+  | `/api/public/me` | `application/json` | `text/html` |
+
+  The storefront serves **none** of the backend's API routes, and ships a different
+  build hash and page title. Repointing `drivorata.com` therefore moves only this
+  backend; `allagesdrivingschool.com` keeps resolving to Replit. Shutting Replit down
+  takes the public site of the only tenant with real enrollments offline. Migrating or
   re-hosting that app is separate work.
+
+  (Note `www.allagesdrivingschool.com` is already broken independently of this
+  migration: it CNAMEs to `drivorata-tenant.replit.app`, which returns 404.)
 - Then decommission Replit: object storage bucket, database, secrets.
 
 ## Rollback

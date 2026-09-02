@@ -195,9 +195,16 @@ was taken before the change.
 - Cart-reminder resume links use `{APP_BASE_URL}/site/{slug}` rather than the
   custom domain.
 
-Tenants 29, 30 and 31 are empty duplicates (0 enrollments, 0 payments). Worth
-deleting once confirmed unwanted; tenant 30 in particular shadows the real
-tenant's domain resolution as described above.
+Tenants 29, 30 and 31 (empty duplicates) were **deleted from production** on
+2026-09-01 after confirming zero enrollments, payments, bookings and API keys —
+only 6 dependent rows (3 `tenant_members`, 3 `tenant_themes`). Row-level backups
+were taken first. This also removed the tenant-30 shadowing described above.
+
+⚠️ **Side effect:** three users were `tenant_admin` of *only* those tenants and now
+have no membership — `zaraskhan05@gmail.com`, `gonzalezeddie410@gmail.com`,
+`jonathan.delgado12@icloud.com`. Their `users` rows still exist (users are global,
+not tenant-scoped), so they can still sign in but will land on the empty
+school-picker. If any were real prospects rather than test signups, re-invite them.
 
 ## 3. After cutover
 - Keep the Replit deployment stopped but intact for a rollback window (repoint DNS back to roll back).
@@ -227,6 +234,16 @@ tenant's domain resolution as described above.
 
   (Note `www.allagesdrivingschool.com` is already broken independently of this
   migration: it CNAMEs to `drivorata-tenant.replit.app`, which returns 404.)
+- **Storefront replatform (separate work, owner: Nawaz).** To move it off Replit:
+  its contract with this backend is `docs/headless-api.md` (also served live at
+  `/api/headless-guide.md`). It needs three settings — `DRIVORATA_URL`
+  (stays `https://drivorata.com`, unchanged by this migration), `SCHOOL_SLUG`, and
+  `DRIVORATA_API_KEY` (tenant 28 has 1 active key). Best practice from the docs:
+  call `GET /api/public/me` at startup to resolve the slug dynamically rather than
+  hardcoding it, so a slug rename doesn't break the site. `/api/public/*` sends
+  `Access-Control-Allow-Origin: *` with `credentials: false`, so any host works.
+  Once it is re-hosted, repoint `allagesdrivingschool.com` (and fix the broken
+  `www.` CNAME) — then Replit can be shut down.
 - Then decommission Replit: object storage bucket, database, secrets.
 
 ## Rollback

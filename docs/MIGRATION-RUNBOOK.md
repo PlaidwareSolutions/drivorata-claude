@@ -244,6 +244,22 @@ school-picker. If any were real prospects rather than test signups, re-invite th
   `Access-Control-Allow-Origin: *` with `credentials: false`, so any host works.
   Once it is re-hosted, repoint `allagesdrivingschool.com` (and fix the broken
   `www.` CNAME) — then Replit can be shut down.
+
+  **How that domain must be repointed — decided 2026-09-03.** `allagesdrivingschool.com`
+  is on GoDaddy nameservers. Railway is CNAME-only and a CNAME at the apex is forbidden
+  by RFC 1034; GoDaddy has no CNAME flattening or ALIAS, and Railway's targets are
+  per-domain IPs on a 60s TTL, so an A record is not a workaround either. GoDaddy's
+  301 forwarding was considered and **rejected**: the live apex sends
+  `strict-transport-security: max-age=63072000; includeSubDomains`, so every returning
+  visitor's browser has the apex pinned HTTPS-only for two years, and GoDaddy does not
+  provision certificates for forwarded domains — the result would be a non-bypassable
+  TLS block, not a redirect. **The chosen path is to move the zone's nameservers to
+  Cloudflare** (same pair as `drivorata.com`), which flattens the apex CNAME. Safety
+  for the school's Microsoft 365 email: a Cloudflare replica of all 23 records already
+  exists (built from GoDaddy's authoritative server, everything DNS-only), the full
+  record list is diffed in the GoDaddy UI before the flip, a mail test gates the
+  storefront cutover, and the domain has no DNSSEC DS record and no DKIM selectors to
+  carry over. Rollback is an NS revert — GoDaddy retains the zone.
 - Then decommission Replit: object storage bucket, database, secrets.
 
 ## Rollback

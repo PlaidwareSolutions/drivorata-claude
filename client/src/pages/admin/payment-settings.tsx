@@ -449,9 +449,16 @@ export default function PaymentSettingsPage() {
                   render={({ field }) => (
                     <FormItem>
                       <div className="flex items-center justify-between">
-                        <FormLabel>Webhook Secret (optional)</FormLabel>
+                        <FormLabel>Webhook Secret (required for card payments)</FormLabel>
                         <SavedBadge fieldName="stripeWebhookSecret" current={field.value} settings={settings} />
                       </div>
+                      <p className="text-xs text-muted-foreground">
+                        Without it, paid checkouts are never confirmed. In Stripe, add a webhook endpoint for{" "}
+                        <code>{window.location.origin}/api/webhooks/stripe</code> with the events{" "}
+                        <code>checkout.session.completed</code>, <code>checkout.session.async_payment_succeeded</code>,{" "}
+                        <code>checkout.session.async_payment_failed</code> and <code>checkout.session.expired</code>,
+                        then paste its signing secret here.
+                      </p>
                       <FormControl>
                         <SecretInput
                           name={field.name}

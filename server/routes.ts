@@ -63,9 +63,10 @@ import { db } from "./db";
 import { eq, and, gte, count, desc, sql, inArray, isNull } from "drizzle-orm";
 import { purgePreviewData } from "./demo-data";
 import { affiliates as affiliatesTable, sessionActivityLog } from "@shared/schema";
-import { createStripeCheckoutSession, verifyStripeWebhook, testStripeConnection } from "./payments/stripe-adapter";
+import { createStripeCheckoutSession, testStripeConnection } from "./payments/stripe-adapter";
 import { createPayPalOrder, capturePayPalOrder, testPayPalConnection } from "./payments/paypal-adapter";
 import { handleResendWebhook } from "./resend-webhook";
+import { handleStripeWebhook } from "./payments/stripe-webhook";
 import { handleInboundEmailWebhook } from "./inbound-email-webhook";
 import { activateEnrollment, activateCart, confirmEnrollmentManually } from "./payments/activation-service";
 import { sendEnrollmentReceived, sendEnrollmentReceivedForCart, fireAndForget, TEMPLATE_DEFS, type EnrollmentEmailKey } from "./enrollment-emails";
@@ -6484,75 +6485,7 @@ export async function registerRoutes(
 
   // ===== STRIPE WEBHOOK =====
 
-  app.post("/api/webhooks/stripe", async (req: any, res) => {
-    try {
-      const signature = req.headers["stripe-signature"];
-      if (!signature) {
-        return res.status(400).json({ message: "Missing Stripe signature" });
-      }
-
-      const rawBody = req.rawBody || req.body;
-      if (!rawBody) {
-        return res.status(400).json({ message: "Missing request body" });
-      }
-
-      const bodyStr = typeof rawBody === "string" ? rawBody : JSON.stringify(rawBody);
-      const parsed = typeof rawBody === "string" ? JSON.parse(rawBody) : rawBody;
-
-      if (parsed.type !== "checkout.session.completed") {
-        return res.json({ received: true });
-      }
-
-      const session = parsed.data?.object;
-      const paymentId = parseInt(session?.metadata?.paymentId);
-      const enrollmentId = parseInt(session?.metadata?.enrollmentId);
-      const cartId = session?.metadata?.cartId as string | undefined;
-
-      if (!paymentId || (!enrollmentId && !cartId)) {
-        console.error("Stripe webhook missing metadata");
-        return res.status(400).json({ message: "Missing metadata" });
-      }
-
-      const payment = await storage.getPayment(paymentId);
-      if (!payment) {
-        return res.status(404).json({ message: "Payment not found" });
-      }
-
-      if (payment.status === "COMPLETED") {
-        return res.json({ received: true, alreadyProcessed: true });
-      }
-
-      const tenantSettings = await storage.getTenantPaymentSettings(payment.tenantId);
-      if (tenantSettings?.stripeWebhookSecret) {
-        try {
-          await verifyStripeWebhook(bodyStr, signature, tenantSettings.stripeWebhookSecret);
-        } catch (err) {
-          console.error("Stripe webhook signature verification failed:", err);
-          return res.status(400).json({ message: "Invalid signature" });
-        }
-      }
-
-      await storage.updatePayment(paymentId, {
-        status: "COMPLETED",
-        providerPaymentId: session?.payment_intent || null,
-        rawProviderJson: session,
-        completedAt: new Date(),
-      } as any);
-
-      if (payment.cartId) {
-        const r = await activateCart(payment.id);
-        if (!r.ok) console.error("Cart activation errors:", r.errors);
-      } else {
-        const result = await activateEnrollment(enrollmentId, paymentId);
-        if (!result.ok) console.error("Enrollment activation failed:", result.error);
-      }
-
-      res.json({ received: true });
-    } catch (error) {
-      console.error("Stripe webhook error:", error);
-      res.status(500).json({ message: "Webhook processing failed" });
-    }
-  });
+  app.post("/api/webhooks/stripe", handleStripeWebhook);
 
   // ===== PAYPAL CAPTURE =====
 

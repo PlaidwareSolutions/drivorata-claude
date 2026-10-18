@@ -265,6 +265,28 @@ school-picker. If any were real prospects rather than test signups, re-invite th
 ## Rollback
 DNS back to Replit; restart the Replit deployment. Data written on Railway after the freeze would need to be replayed by hand, which is why the freeze exists.
 
+## Stripe payments were never confirmed (found 2026-10-17/18)
+
+The Stripe webhook never processed an event (rawBody Buffer bug, fixed on
+`fix/stripe-webhook`), **and** tenant 28's Stripe account had no webhook
+destination registered at all. Effect on production, tenant 28:
+
+- 0 `COMPLETED` Stripe payments ever; 1 confirmed enrollment ever.
+- Stripe export (2026-05-24 → 2026-10-18): 96 succeeded charges, $20,573.50.
+  95 matched to a checkout row (75 by student/parent email + amount, 19 by
+  exact amount within 10 min, 1 needs review); 1 was a $1.50 test charge.
+- Of those: 27 online-course purchases (the course link is only in the
+  never-sent "payment received" email), 52 undated services (road tests,
+  lessons, online class), 16 class purchases whose class date has passed.
+- The hourly expiry job on Replit stopped expiring rows after 2026-07-13.
+
+The webhook destination (`https://drivorata.com/api/webhooks/stripe`, the four
+`checkout.session.*` events) and the tenant's signing secret were set on
+2026-10-18. Events still reach the old Replit code until the apex cutover.
+The per-customer recovery list lives outside the repo (it contains PII).
+Recovering these rows must not re-send months-late customer emails or book
+seats on past offerings.
+
 ## Known follow-ups (not part of the migration)
 - Request logger prints full JSON response bodies (PII) — trim in `server/index.ts`.
 - `POST /api/auth/forgot-password` returns the reset token in the response body instead of emailing it.

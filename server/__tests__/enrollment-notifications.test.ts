@@ -366,3 +366,23 @@ test("admin details show the class, reference and email history; resend sends ag
   });
   assert.equal(bad.status, 400);
 });
+
+test("payments list with context names the customer, class and enrollment", async () => {
+  const { paymentId, reference, cartId, student } = await startClassCartCheckout("STRIPE");
+  await pay(paymentId);
+  await activateCart(paymentId);
+  const [enr] = await db.select().from(enrollments).where(eq(enrollments.cartId, cartId));
+
+  const list = await (await fetch(`${baseUrl}/api/tenants/${tenantId}/payments?include=context`, { headers: adminHeaders() })).json();
+  const row = list.find((p: any) => p.id === paymentId);
+  assert.ok(row, "payment listed");
+  assert.equal(row.reference, reference);
+  assert.equal(row.status, "COMPLETED");
+  assert.equal(row.enrollment.id, enr.id);
+  assert.equal(row.cartCustomer.email, student.email);
+  assert.equal(row.metadataJson.purchase[0].className, "Cypress Evening Class");
+  assert.equal(row.cartItems[0].offering.name, "Cypress Evening Class");
+
+  const plain = await (await fetch(`${baseUrl}/api/tenants/${tenantId}/payments`, { headers: adminHeaders() })).json();
+  assert.equal(plain.find((p: any) => p.id === paymentId).enrollment, undefined, "plain list unchanged");
+});

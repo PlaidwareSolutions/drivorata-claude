@@ -562,6 +562,7 @@ export interface IStorage {
   listPendingCashPayments(tenantId: number): Promise<Array<Payment & { enrollment: Enrollment | null; cartCustomer: any; cartItems: Array<{ package: Package | null; offering: ScheduleOffering | null; quantity: number }> }>>;
   countPendingCashPayments(tenantId: number): Promise<number>;
   listUnconfirmedCardPayments(tenantId: number): Promise<Array<Payment & { enrollment: Enrollment | null; cartCustomer: any; cartItems: Array<{ package: Package | null; offering: ScheduleOffering | null; quantity: number }> }>>;
+  listPaymentsWithContext(tenantId: number): Promise<Array<Payment & { enrollment: Enrollment | null; cartCustomer: any; cartItems: Array<{ package: Package | null; offering: ScheduleOffering | null; quantity: number }> }>>;
   cancelCashPayment(paymentId: number, tenantId: number): Promise<{ ok: boolean; cartId: string | null; enrollmentIds: number[] }>;
   listAbandonedCarts(tenantId: number): Promise<Array<Cart & { items: Array<CartItem & { package: Package; offering?: ScheduleOffering | null }> }>>;
   expireAbandonedCarts(tenantId: number, olderThanHours: number): Promise<Array<{ cartId: string; tenantId: number }>>;
@@ -1597,6 +1598,14 @@ export class DatabaseStorage implements IStorage {
         inArray(payments.status, ["PENDING", "EXPIRED", "FAILED"]),
         isNotNull(payments.providerOrderId),
       ))
+      .orderBy(desc(payments.createdAt));
+    return this.withPaymentContext(rows);
+  }
+
+  // Every payment for the admin Payments page, with who paid and for what.
+  async listPaymentsWithContext(tenantId: number): Promise<Array<Payment & { enrollment: Enrollment | null; cartCustomer: any; cartItems: Array<{ package: Package | null; offering: ScheduleOffering | null; quantity: number }> }>> {
+    const rows = await db.select().from(payments)
+      .where(eq(payments.tenantId, tenantId))
       .orderBy(desc(payments.createdAt));
     return this.withPaymentContext(rows);
   }

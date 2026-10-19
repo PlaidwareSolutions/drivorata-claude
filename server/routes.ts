@@ -68,6 +68,7 @@ import { createPayPalOrder, capturePayPalOrder, testPayPalConnection } from "./p
 import { handleResendWebhook } from "./resend-webhook";
 import { handleStripeWebhook } from "./payments/stripe-webhook";
 import { checkUnconfirmedPayments, recoverPayment, RecoveryError } from "./payments/payment-recovery";
+import { describePurchase, purchaseItem } from "./payments/checkout-reference";
 import { handleInboundEmailWebhook } from "./inbound-email-webhook";
 import { activateEnrollment, activateCart, confirmEnrollmentManually } from "./payments/activation-service";
 import { sendEnrollmentReceived, sendEnrollmentReceivedForCart, fireAndForget, TEMPLATE_DEFS, type EnrollmentEmailKey } from "./enrollment-emails";
@@ -5406,6 +5407,11 @@ export async function registerRoutes(
         amountPaid: 0,
       });
 
+      const purchaseLocation = locationId ? await storage.getLocation(locationId) : null;
+      const purchase = [
+        purchaseItem({ name: pkg.name, priceCents: subtotalCents, packageId: pkg.id, location: purchaseLocation }),
+      ];
+
       const paymentData: any = {
         tenantId: tenant.id,
         enrollmentId: enrollment.id,
@@ -5419,6 +5425,7 @@ export async function registerRoutes(
           tenantId: String(tenant.id),
           enrollmentId: String(enrollment.id),
           packageName: pkg.name,
+          purchase,
           subtotalCents: String(subtotalCents),
           serviceFeeCents: String(serviceFeeCents),
           serviceFeeBps: String(settings.serviceFeeBps ?? 0),
@@ -5447,13 +5454,14 @@ export async function registerRoutes(
 
       if (provider === "CASH") {
         await storage.updatePayment(payment.id, { status: "PENDING" });
-        return res.json({ cashPayment: true, enrollmentId: enrollment.id, paymentId: payment.id });
+        return res.json({ cashPayment: true, enrollmentId: enrollment.id, paymentId: payment.id, reference: payment.reference });
       }
 
       const baseUrl = getRequestBaseUrl(req);
+      const refParam = `&ref=${encodeURIComponent(payment.reference ?? "")}`;
       const successUrl = externalSuccessUrl
-        ? `${externalSuccessUrl}${externalSuccessUrl.includes("?") ? "&" : "?"}enrollment=${enrollment.id}`
-        : `${baseUrl}/site/${tenant.slug}/checkout/success?enrollment=${enrollment.id}`;
+        ? `${externalSuccessUrl}${externalSuccessUrl.includes("?") ? "&" : "?"}enrollment=${enrollment.id}${refParam}`
+        : `${baseUrl}/site/${tenant.slug}/checkout/success?enrollment=${enrollment.id}${refParam}`;
       const cancelUrl = externalCancelUrl || `${baseUrl}/site/${tenant.slug}/enroll?cancelled=true`;
 
       let redirectUrl: string;
@@ -5463,13 +5471,15 @@ export async function registerRoutes(
           secretKey: settings.stripeSecretKey!,
           amountCents: grossAmountCents,
           currency: "USD",
-          description: `${pkg.name} - ${tenant.name}`,
+          description: describePurchase(purchase, payment.reference),
+          reference: payment.reference,
           successUrl,
           cancelUrl,
           metadata: {
             tenantId: String(tenant.id),
             enrollmentId: String(enrollment.id),
             paymentId: String(payment.id),
+            reference: payment.reference ?? "",
           },
         });
 
@@ -5486,7 +5496,7 @@ export async function registerRoutes(
           mode: settings.paypalMode || "sandbox",
           amountCents: grossAmountCents,
           currency: "USD",
-          description: `${pkg.name} - ${tenant.name}`,
+          description: describePurchase(purchase, payment.reference, 127),
           returnUrl: `${baseUrl}/api/payments/paypal/return?enrollmentId=${enrollment.id}`,
           cancelUrl,
           metadata: {
@@ -5508,6 +5518,7 @@ export async function registerRoutes(
         redirectUrl,
         enrollmentId: enrollment.id,
         paymentId: payment.id,
+        reference: payment.reference,
         subtotalCents,
         serviceFeeCents,
         serviceFeeBps: settings.serviceFeeBps ?? 0,
@@ -6010,6 +6021,22 @@ export async function registerRoutes(
       // leave orphan pending_payment enrollments behind.
       await storage.setCartCustomer(cart.id, student, locationId || null);
 
+      // Snapshot what was bought, including each class and its date, so the
+      // payment still says which class it was for if activation never runs.
+      const purchaseLocations = new Map<number, Awaited<ReturnType<typeof storage.getLocation>>>();
+      for (const id of new Set(items.map((i) => i.offering?.locationId ?? locationId).filter((x): x is number => x != null))) {
+        purchaseLocations.set(id, await storage.getLocation(id));
+      }
+      const purchase = items.map((i) =>
+        purchaseItem({
+          name: i.package.name,
+          priceCents: i.priceCents || 0,
+          packageId: i.packageId,
+          offering: i.offering,
+          location: purchaseLocations.get((i.offering?.locationId ?? locationId) as number) ?? null,
+        }),
+      );
+
       const paymentData: InsertPayment = {
         tenantId: tenant.id,
         enrollmentId: null,
@@ -6024,6 +6051,7 @@ export async function registerRoutes(
           tenantId: String(tenant.id),
           cartId: cart.id,
           itemCount: String(items.length),
+          purchase,
           subtotalCents: String(subtotalCents),
           serviceFeeCents: String(serviceFeeCents),
           serviceFeeBps: String(settings.serviceFeeBps ?? 0),
@@ -6063,15 +6091,15 @@ export async function registerRoutes(
           () => sendEnrollmentReceivedForCart(tenant, cartForEmail, items, payment),
           `enrollment_received cart-checkout-cash cart=${cart.id}`,
         );
-        return res.json({ cashPayment: true, cartId: cart.id, paymentId: payment.id });
+        return res.json({ cashPayment: true, cartId: cart.id, paymentId: payment.id, reference: payment.reference });
       }
 
       const baseUrl = getRequestBaseUrl(req);
       const internalSuccess = `${baseUrl}/site/${tenant.slug}/checkout/success?cart=${cart.id}`;
       const internalCancel = `${baseUrl}/site/${tenant.slug}/cart`;
-      const successUrl = externalSuccessUrl
+      const successUrl = `${externalSuccessUrl
         ? `${externalSuccessUrl}${externalSuccessUrl.includes("?") ? "&" : "?"}cart=${cart.id}`
-        : internalSuccess;
+        : internalSuccess}&ref=${encodeURIComponent(payment.reference ?? "")}`;
       const cancelUrl = externalCancelUrl || internalCancel;
 
       // Try the provider session/order BEFORE freezing the cart, so a
@@ -6084,9 +6112,16 @@ export async function registerRoutes(
             secretKey: settings.stripeSecretKey!,
             amountCents: totalCents,
             currency: "USD",
-            description: `${tenant.name} — ${items.length} item(s)`,
+            description: describePurchase(purchase, payment.reference),
+            reference: payment.reference,
             successUrl, cancelUrl,
-            metadata: { tenantId: String(tenant.id), cartId: cart.id, paymentId: String(payment.id) },
+            metadata: {
+              tenantId: String(tenant.id),
+              cartId: cart.id,
+              paymentId: String(payment.id),
+              reference: payment.reference ?? "",
+              offeringIds: items.map((i) => i.offeringId).filter(Boolean).join(","),
+            },
           });
           await storage.updatePayment(payment.id, { providerOrderId: result.sessionId, status: "PENDING" });
           redirectUrl = result.redirectUrl;
@@ -6097,7 +6132,7 @@ export async function registerRoutes(
             mode: settings.paypalMode || "sandbox",
             amountCents: totalCents,
             currency: "USD",
-            description: `${tenant.name} — Cart ${cart.id.slice(0, 8)}`,
+            description: describePurchase(purchase, payment.reference, 127),
             returnUrl: `${baseUrl}/api/payments/paypal/return?cartId=${cart.id}&paymentId=${payment.id}`,
             cancelUrl,
             metadata: { tenantId: String(tenant.id), cartId: cart.id, paymentId: String(payment.id) },
@@ -6124,6 +6159,7 @@ export async function registerRoutes(
         redirectUrl,
         cartId: cart.id,
         paymentId: payment.id,
+        reference: payment.reference,
         subtotalCents,
         serviceFeeCents,
         serviceFeeBps: settings.serviceFeeBps ?? 0,
@@ -6350,6 +6386,8 @@ export async function registerRoutes(
         notes: `Online Course: ${course.name}${course.providerName ? ` (${course.providerName})` : ""}`,
       });
 
+      const coursePurchase = [purchaseItem({ name: course.name, priceCents: subtotalCents, onlineCourseId: course.id })];
+
       const paymentData: any = {
         tenantId: tenant.id,
         enrollmentId: enrollment.id,
@@ -6365,6 +6403,7 @@ export async function registerRoutes(
           onlineCourseId: String(course.id),
           onlineCourseName: course.name,
           isOnlineCourse: "true",
+          purchase: coursePurchase,
           subtotalCents: String(subtotalCents),
           serviceFeeCents: String(serviceFeeCents),
           serviceFeeBps: String(settings.serviceFeeBps ?? 0),
@@ -6387,13 +6426,14 @@ export async function registerRoutes(
 
       if (provider === "CASH") {
         await storage.updatePayment(payment.id, { status: "PENDING" } as any);
-        return res.json({ cashPayment: true, enrollmentId: enrollment.id, paymentId: payment.id });
+        return res.json({ cashPayment: true, enrollmentId: enrollment.id, paymentId: payment.id, reference: payment.reference });
       }
 
       const baseUrl = getRequestBaseUrl(req);
+      const refParam = `&ref=${encodeURIComponent(payment.reference ?? "")}`;
       const successUrl = externalSuccessUrl
-        ? `${externalSuccessUrl}${externalSuccessUrl.includes("?") ? "&" : "?"}enrollment=${enrollment.id}`
-        : `${baseUrl}/site/${tenant.slug}/checkout/success?enrollment=${enrollment.id}`;
+        ? `${externalSuccessUrl}${externalSuccessUrl.includes("?") ? "&" : "?"}enrollment=${enrollment.id}${refParam}`
+        : `${baseUrl}/site/${tenant.slug}/checkout/success?enrollment=${enrollment.id}${refParam}`;
       const cancelUrl = externalCancelUrl || `${baseUrl}/site/${tenant.slug}/enroll?cancelled=true`;
 
       let redirectUrl: string;
@@ -6404,7 +6444,8 @@ export async function registerRoutes(
             secretKey: settings.stripeSecretKey!,
             amountCents: grossAmountCents,
             currency: "USD",
-            description: `${course.name} - ${tenant.name}`,
+            description: describePurchase(coursePurchase, payment.reference),
+            reference: payment.reference,
             successUrl,
             cancelUrl,
             metadata: {
@@ -6412,6 +6453,7 @@ export async function registerRoutes(
               enrollmentId: String(enrollment.id),
               paymentId: String(payment.id),
               onlineCourseId: String(course.id),
+              reference: payment.reference ?? "",
             },
           });
 
@@ -6428,7 +6470,7 @@ export async function registerRoutes(
             mode: settings.paypalMode || "sandbox",
             amountCents: grossAmountCents,
             currency: "USD",
-            description: `${course.name} - ${tenant.name}`,
+            description: describePurchase(coursePurchase, payment.reference, 127),
             returnUrl: `${baseUrl}/api/payments/paypal/return?enrollmentId=${enrollment.id}`,
             cancelUrl,
             metadata: {
@@ -6477,7 +6519,7 @@ export async function registerRoutes(
         });
       }
 
-      res.json({ redirectUrl, enrollmentId: enrollment.id, paymentId: payment.id });
+      res.json({ redirectUrl, enrollmentId: enrollment.id, paymentId: payment.id, reference: payment.reference });
     } catch (error) {
       console.error("Online course checkout start error:", error);
       res.status(500).json({ message: "Failed to start online course checkout" });
@@ -6659,6 +6701,7 @@ export async function registerRoutes(
 
       res.json({
         id: enrollment.id,
+        reference: enrollment.reference,
         status: enrollment.status,
         firstName: enrollment.firstName,
         lastName: enrollment.lastName,

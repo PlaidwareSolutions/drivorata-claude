@@ -435,6 +435,7 @@ Response (Stripe/PayPal):
   "redirectUrl": "https://checkout.stripe.com/c/pay/...",
   "enrollmentId": 9011,
   "paymentId": 5523,
+  "reference": "AA-7K3F9Q",
   "subtotalCents": 12500,
   "serviceFeeCents": 875,
   "serviceFeeBps": 300,
@@ -455,8 +456,14 @@ you can render an itemised receipt locally without re-fetching settings.
 Response (CASH provider):
 
 ```json
-{ "cashPayment": true, "enrollmentId": 9011, "paymentId": 5523 }
+{ "cashPayment": true, "enrollmentId": 9011, "paymentId": 5523, "reference": "AA-7K3F9Q" }
 ```
+
+`reference` is the checkout's human-readable reference (school initials + six
+characters, never `I`/`O`/`0`/`1`). Show it on the thank-you page and quote it
+in support conversations: the school sees the same code in the admin, in its
+emails and on the Stripe payment. It is also appended to the success URL as
+`&ref=AA-7K3F9Q`, and returned by `GET /api/public/enrollments/:id/status`.
 
 > CASH and external/headless redirect flows **never** carry a service
 > or admin fee — even when the tenant has configured one. Don't apply
@@ -495,6 +502,7 @@ Response (Stripe / PayPal):
   "redirectUrl": "https://checkout.stripe.com/c/pay/...",
   "cartId": "c_8f2c…",
   "paymentId": 5524,
+  "reference": "AA-7K3F9Q",
   "subtotalCents": 72400,
   "serviceFeeCents": 2672,
   "serviceFeeBps": 300,
@@ -511,7 +519,7 @@ the payment provider session is opened for.
 Response (CASH provider):
 
 ```json
-{ "cashPayment": true, "cartId": "c_8f2c…", "paymentId": 5524 }
+{ "cashPayment": true, "cartId": "c_8f2c…", "paymentId": 5524, "reference": "AA-7K3F9Q" }
 ```
 
 The server re-validates every cart item against the effective `locationId`

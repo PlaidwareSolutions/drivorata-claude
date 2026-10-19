@@ -8,6 +8,8 @@ export interface StripeStartInput {
   successUrl: string;
   cancelUrl: string;
   metadata: Record<string, string>;
+  /** Checkout reference; shown on the Stripe payment as client_reference_id. */
+  reference?: string | null;
 }
 
 export interface StripeStartOutput {
@@ -34,6 +36,14 @@ async function realCreateStripeCheckoutSession(input: StripeStartInput): Promise
       },
     ],
     metadata: input.metadata,
+    // Session metadata never reaches the PaymentIntent, so the Payments list,
+    // exports and receipts in the Stripe dashboard showed no trace of which
+    // class was bought. Copy the description and metadata onto it.
+    payment_intent_data: {
+      description: input.description,
+      metadata: input.metadata,
+    },
+    ...(input.reference ? { client_reference_id: input.reference } : {}),
     success_url: input.successUrl,
     cancel_url: input.cancelUrl,
   });

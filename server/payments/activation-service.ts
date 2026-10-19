@@ -114,7 +114,7 @@ export async function activateCart(paymentId: number, opts: ActivationOptions = 
       // a single DB transaction. If anything fails, nothing is persisted.
       const created = await storage.createCartEnrollmentsAndBookAtomic(
         cartId,
-        { id: payment.id, tenantId: payment.tenantId, amountCents: payment.amountCents },
+        { id: payment.id, tenantId: payment.tenantId, amountCents: payment.amountCents, reference: payment.reference },
         { bookOfferings: opts.bookOfferings ?? true },
       );
       if (!created.ok) {

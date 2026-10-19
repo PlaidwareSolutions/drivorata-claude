@@ -550,6 +550,9 @@ export const enrollments = pgTable(
     offeringId: integer("offering_id"),
     isWaitlisted: boolean("is_waitlisted").default(false),
     stripePaymentId: varchar("stripe_payment_id"),
+    // Checkout reference shared with the payment (payments.reference). Several
+    // enrollments can carry the same one when a cart holds several items.
+    reference: varchar("reference", { length: 20 }),
     amountPaid: integer("amount_paid"),
     priceSnapshotCents: integer("price_snapshot_cents"),
     currencySnapshot: varchar("currency_snapshot").default("USD"),
@@ -564,6 +567,7 @@ export const enrollments = pgTable(
   (table) => [
     index("enrollment_tenant_status").on(table.tenantId, table.status),
     index("enrollment_tenant_email").on(table.tenantId, table.email),
+    index("enrollment_tenant_reference").on(table.tenantId, table.reference),
   ]
 );
 
@@ -614,6 +618,9 @@ export const payments = pgTable(
     providerOrderId: varchar("provider_order_id"),
     providerPaymentId: varchar("provider_payment_id"),
     idempotencyKey: varchar("idempotency_key"),
+    // Human-readable checkout reference ("AA-7K3F9Q"), sent to the provider
+    // and quoted in every email. Null only on rows from before it existed.
+    reference: varchar("reference", { length: 20 }),
     metadataJson: jsonb("metadata_json"),
     rawProviderJson: jsonb("raw_provider_json"),
     studentSignature: text("student_signature"),
@@ -626,6 +633,7 @@ export const payments = pgTable(
   (table) => [
     index("payment_tenant_enrollment").on(table.tenantId, table.enrollmentId),
     index("payment_provider_order").on(table.provider, table.providerOrderId),
+    uniqueIndex("payment_reference_unique").on(table.reference),
   ]
 );
 

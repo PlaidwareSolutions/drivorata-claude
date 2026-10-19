@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import type Stripe from "stripe";
 import { storage } from "../storage";
 import { verifyStripeWebhook } from "./stripe-adapter";
-import { activateCart, activateEnrollment } from "./activation-service";
+import { completeProviderPayment } from "./complete-payment";
 
 // Stripe webhook secrets are per tenant, so the payment row named in the
 // (still unverified) metadata is the only way to find which secret to verify
@@ -111,26 +111,10 @@ async function completePayment(
   payment: NonNullable<Awaited<ReturnType<typeof storage.getPayment>>>,
   session: Stripe.Checkout.Session,
 ) {
-  if (payment.status === "COMPLETED") {
-    return { received: true, alreadyProcessed: true };
-  }
-
-  await storage.updatePayment(payment.id, {
-    status: "COMPLETED",
+  const r = await completeProviderPayment(payment.id, {
     providerPaymentId:
       typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id ?? null,
-    rawProviderJson: session,
-    completedAt: new Date(),
-  } as any);
-
-  if (payment.cartId) {
-    const r = await activateCart(payment.id);
-    if (!r.ok) console.error("[StripeWebhook] cart activation errors:", r.errors);
-  } else if (payment.enrollmentId) {
-    const r = await activateEnrollment(payment.enrollmentId, payment.id);
-    if (!r.ok) console.error("[StripeWebhook] enrollment activation failed:", r.error);
-  } else {
-    console.error(`[StripeWebhook] payment ${payment.id} has neither cartId nor enrollmentId`);
-  }
-  return { received: true };
+    raw: session,
+  });
+  return r.alreadyCompleted ? { received: true, alreadyProcessed: true } : { received: true };
 }

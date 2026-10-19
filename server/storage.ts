@@ -1,4 +1,5 @@
 import {
+  type SessionChangeEmail,
   type User,
   type UpsertUser,
   type Tenant,
@@ -146,7 +147,7 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { generateReference } from "./payments/checkout-reference";
-import { eq, and, or, ilike, inArray, isNotNull, sql, desc, lt, count, type SQL } from "drizzle-orm";
+import { eq, and, or, ilike, inArray, isNotNull, isNull, sql, desc, lt, count, type SQL } from "drizzle-orm";
 import {
   CartCheckoutError,
   CartCheckoutErrorCode,
@@ -494,6 +495,8 @@ export interface IStorage {
   addEmailUnsubscribe(data: InsertEmailUnsubscribe): Promise<EmailUnsubscribe>;
   getUnsubscribedEmailsForTenant(tenantId: number): Promise<Map<string, string>>;
   getSessionChangeEmailByProviderMessageId(providerMessageId: string): Promise<{ tenantId: number } | undefined>;
+  recordEmailDelivery(providerMessageId: string, status: string, at: Date): Promise<number>;
+  listEmailsForEnrollment(tenantId: number, enrollmentId: number, paymentIds: number[]): Promise<SessionChangeEmail[]>;
 
   getMarketingProgramSettings(): Promise<MarketingProgramSettings>;
   updateMarketingProgramSettings(data: Partial<InsertMarketingProgramSettings>): Promise<MarketingProgramSettings>;
@@ -4015,6 +4018,34 @@ export class DatabaseStorage implements IStorage {
       map.set((r.email || "").toLowerCase(), r.source || "cart_reminder");
     }
     return map;
+  }
+
+  // Latest delivery outcome from Resend. A late "delivery_delayed" never
+  // overwrites a final outcome (delivered / bounced / complained).
+  async recordEmailDelivery(providerMessageId: string, status: string, at: Date): Promise<number> {
+    const rows = await db.update(sessionChangeEmails)
+      .set({ deliveryStatus: status, deliveryUpdatedAt: at })
+      .where(and(
+        eq(sessionChangeEmails.providerMessageId, providerMessageId),
+        status === "delivery_delayed"
+          ? or(isNull(sessionChangeEmails.deliveryStatus), eq(sessionChangeEmails.deliveryStatus, "delivery_delayed"))
+          : undefined,
+      ))
+      .returning({ id: sessionChangeEmails.id });
+    return rows.length;
+  }
+
+  // Every email about one enrollment: tagged with it, or with one of its
+  // payments (cart checkouts send before the enrollment exists).
+  async listEmailsForEnrollment(tenantId: number, enrollmentId: number, paymentIds: number[]): Promise<SessionChangeEmail[]> {
+    return db.select().from(sessionChangeEmails)
+      .where(and(
+        eq(sessionChangeEmails.tenantId, tenantId),
+        paymentIds.length
+          ? or(eq(sessionChangeEmails.enrollmentId, enrollmentId), inArray(sessionChangeEmails.paymentId, paymentIds))
+          : eq(sessionChangeEmails.enrollmentId, enrollmentId),
+      ))
+      .orderBy(desc(sessionChangeEmails.createdAt));
   }
 
   async getSessionChangeEmailByProviderMessageId(providerMessageId: string): Promise<{ tenantId: number } | undefined> {

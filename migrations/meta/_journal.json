@@ -29,6 +29,13 @@
       "when": 1792385110346,
       "tag": "0003_owner_notification_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792386657901,
+      "tag": "0004_email_tracking",
+      "breakpoints": true
     }
   ]
 }

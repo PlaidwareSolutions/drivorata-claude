@@ -1626,8 +1626,22 @@ export const sessionChangeEmails = pgTable("session_change_emails", {
   errorMsg: text("error_msg"),
   providerMessageId: varchar("provider_message_id"),
   sentAt: timestamp("sent_at"),
+  // What this email was and what it was about, so an enrollment's full email
+  // trail can be shown and traced against Resend's logs. Null on older rows
+  // and on session/booking emails.
+  kind: varchar("kind", { length: 40 }),
+  enrollmentId: integer("enrollment_id"),
+  paymentId: integer("payment_id"),
+  // Latest delivery outcome reported by Resend's webhook:
+  // delivered | delivery_delayed | bounced | complained.
+  deliveryStatus: varchar("delivery_status", { length: 20 }),
+  deliveryUpdatedAt: timestamp("delivery_updated_at"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (table) => [
+  index("session_change_email_enrollment").on(table.tenantId, table.enrollmentId),
+  index("session_change_email_payment").on(table.tenantId, table.paymentId),
+  index("session_change_email_provider_msg").on(table.providerMessageId),
+]);
 
 export const insertSessionChangeEmailSchema = createInsertSchema(sessionChangeEmails).omit({ id: true, createdAt: true, sentAt: true });
 export type InsertSessionChangeEmail = z.infer<typeof insertSessionChangeEmailSchema>;

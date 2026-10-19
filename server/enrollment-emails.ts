@@ -2,7 +2,7 @@ import { db } from "./db";
 import { enrollments, type Enrollment, type Tenant, type Payment, type Cart, type CartItem, type Package, type ScheduleOffering } from "@shared/schema";
 import { eq, and, isNull } from "drizzle-orm";
 import { storage } from "./storage";
-import { sendEmail } from "./email-service";
+import { sendEmail, type EmailKind } from "./email-service";
 import { buildUnsubscribeUrl } from "./cart-reminders";
 import {
   classDateLines,
@@ -160,11 +160,18 @@ function buildHtmlFromText(text: string, unsubscribeUrl: string): string {
   return `${paragraphs}<p style="color:#6b7280;font-size:12px;margin-top:24px">Don't want these emails? <a href="${escapeHtml(unsubscribeUrl)}">Unsubscribe</a>.</p>`;
 }
 
+interface EmailTrace {
+  kind: EmailKind;
+  enrollmentId?: number | null;
+  paymentId?: number | null;
+}
+
 async function sendOne(opts: {
   tenant: Tenant;
   recipientEmail: string;
   subject: string;
   body: string;
+  trace: EmailTrace;
 }): Promise<{ status: string; errorMsg?: string }> {
   const email = (opts.recipientEmail || "").trim();
   if (!email) return { status: "skipped_no_email" };
@@ -182,14 +189,21 @@ async function sendOne(opts: {
       "List-Unsubscribe": `<${unsubscribeUrl}>`,
       "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
     },
+    ...opts.trace,
   });
   return { status: res.status, errorMsg: res.errorMsg };
 }
 
-async function sendToStudentAndParent(tenant: Tenant, email: string, parentEmail: string | null | undefined, msg: { subject: string; body: string }) {
-  await sendOne({ tenant, recipientEmail: email, ...msg });
+async function sendToStudentAndParent(
+  tenant: Tenant,
+  email: string,
+  parentEmail: string | null | undefined,
+  msg: { subject: string; body: string },
+  trace: EmailTrace,
+) {
+  await sendOne({ tenant, recipientEmail: email, ...msg, trace });
   if (parentEmail && parentEmail.trim() && parentEmail.trim().toLowerCase() !== email.trim().toLowerCase()) {
-    await sendOne({ tenant, recipientEmail: parentEmail, ...msg });
+    await sendOne({ tenant, recipientEmail: parentEmail, ...msg, trace });
   }
 }
 
@@ -260,7 +274,11 @@ export async function sendEnrollmentReceived(
   if (!ctx) return;
   const msg = render(await getTemplate(tenant.id, "enrollment_received"), contextFromEnrollment(ctx, { paid: false }));
 
-  await sendToStudentAndParent(tenant, enrollment.email, enrollment.parentEmail, msg);
+  await sendToStudentAndParent(tenant, enrollment.email, enrollment.parentEmail, msg, {
+    kind: "customer_enrollment_received",
+    enrollmentId: enrollment.id,
+    paymentId: ctx.payment?.id ?? null,
+  });
 
   try {
     await db.update(enrollments)
@@ -322,7 +340,10 @@ export async function sendEnrollmentReceivedForCart(
     ]),
   };
   const msg = render(await getTemplate(tenant.id, "enrollment_received"), ctx);
-  await sendToStudentAndParent(tenant, email, cust.parentEmail, msg);
+  await sendToStudentAndParent(tenant, email, cust.parentEmail, msg, {
+    kind: "customer_enrollment_received",
+    paymentId: payment.id,
+  });
 }
 
 // Send "payment received" — the enrollment confirmation — for a single
@@ -348,7 +369,11 @@ export async function sendPaymentReceived(
   if (!claimed) return;
 
   const msg = render(await getTemplate(tenantId, "payment_received"), contextFromEnrollment(ctx, { paid: true }));
-  await sendToStudentAndParent(ctx.tenant, ctx.enrollment.email, ctx.enrollment.parentEmail, msg);
+  await sendToStudentAndParent(ctx.tenant, ctx.enrollment.email, ctx.enrollment.parentEmail, msg, {
+    kind: "customer_payment_received",
+    enrollmentId,
+    paymentId: ctx.payment?.id ?? null,
+  });
 }
 
 // Fire-and-forget wrapper used from request handlers/webhooks so email work

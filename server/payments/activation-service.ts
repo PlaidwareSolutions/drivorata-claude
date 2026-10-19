@@ -122,16 +122,6 @@ export async function activateCart(paymentId: number, opts: ActivationOptions = 
         return { ok: false, cartId, enrollmentIds: [], errors };
       }
       cartEnrollments = created.enrollments;
-      // The cart flow doesn't create enrollment rows until payment lands here,
-      // so fire the per-enrollment admin notification at this point. The
-      // notification helper is idempotent via a DB column claim, so re-running
-      // activateCart on webhook retries won't double-send.
-      for (const enr of opts.notifyAdmin === false ? [] : cartEnrollments) {
-        fireAndForget(
-          () => sendAdminEnrollmentNotification(enr.id, payment.tenantId),
-          `admin_enrollment_notification cart=${cartId} enrollment#${enr.id}`,
-        );
-      }
     }
   } finally {
     await lockClient
@@ -266,6 +256,15 @@ async function activateWithEnrollment(
     fireAndForget(
       () => sendPaymentReceived(enrollment.id, enrollment.tenantId),
       `payment_received enrollment#${enrollment.id}`,
+    );
+  }
+  // The owner's PAID notification, for every payment path (cart, single
+  // package, online course, confirmed cash). Deduplicated per enrollment by
+  // the notification itself, so webhook retries don't double-send.
+  if (opts.notifyAdmin !== false) {
+    fireAndForget(
+      () => sendAdminEnrollmentNotification(enrollment.id, enrollment.tenantId),
+      `admin_enrollment_notification (paid) enrollment#${enrollment.id}`,
     );
   }
 

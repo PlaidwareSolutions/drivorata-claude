@@ -1,8 +1,25 @@
 import { db } from "./db";
-import { enrollments, tenantMembers, users } from "@shared/schema";
-import { and, eq, isNull, or } from "drizzle-orm";
+import { enrollments, payments, tenantMembers, users, type Payment, type Tenant } from "@shared/schema";
+import { and, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { storage } from "./storage";
 import { sendEmail } from "./email-service";
+import { platformBaseUrl } from "./lib/request";
+import {
+  classDateLines,
+  formatLocalDateTime,
+  loadEnrollmentContext,
+  locationLine,
+  paymentMethodLabel,
+  type EnrollmentContext,
+} from "./enrollment-context";
+import { formatClassDate, type PurchaseItem } from "./payments/checkout-reference";
+
+// Owner notifications. Each subject starts with the payment state so a
+// started-but-unpaid checkout can never be mistaken for a sale:
+//   PAID      — payment completed, enrollment confirmed (sent once per enrollment)
+//   CASH DUE  — seat reserved, cash to be collected
+//   NOT PAID  — card checkout started but never paid (follow-up lead)
+//   NEW       — enrollment recorded with no payment involved (admin/manual)
 
 function escapeHtml(s: string): string {
   return s
@@ -25,15 +42,8 @@ function formatCents(cents: number | null | undefined, currency = "USD"): string
   return currency === "USD" ? `$${amt}` : `${amt} ${currency}`;
 }
 
-function formatDateTime(d: Date | string | null | undefined): string {
-  if (!d) return "—";
-  try {
-    const dt = typeof d === "string" ? new Date(d) : d;
-    if (isNaN(dt.getTime())) return "—";
-    return dt.toISOString().replace("T", " ").slice(0, 16) + " UTC";
-  } catch {
-    return "—";
-  }
+function shortDate(iso: Date | string, timezone: string): string {
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: timezone });
 }
 
 function ageAtPurchase(dob: string | null | undefined, asOf: Date | string | null | undefined): number | null {
@@ -52,34 +62,31 @@ interface AdminRecipient {
   userId: string | null;
 }
 
-async function getAdminRecipients(tenantId: number): Promise<AdminRecipient[]> {
+async function getAdminRecipients(tenant: Tenant): Promise<AdminRecipient[]> {
   const rows = await db
     .select({
-      memberId: tenantMembers.id,
       userId: tenantMembers.userId,
       emailInvited: tenantMembers.emailInvited,
-      role: tenantMembers.role,
-      status: tenantMembers.status,
       userEmail: users.email,
     })
     .from(tenantMembers)
     .leftJoin(users, eq(tenantMembers.userId, users.id))
     .where(and(
-      eq(tenantMembers.tenantId, tenantId),
+      eq(tenantMembers.tenantId, tenant.id),
       eq(tenantMembers.status, "ACTIVE"),
       or(eq(tenantMembers.role, "tenant_admin"), eq(tenantMembers.role, "office_manager")),
     ));
 
   const seen = new Set<string>();
   const out: AdminRecipient[] = [];
-  for (const r of rows) {
-    const email = (r.userEmail || r.emailInvited || "").trim();
-    if (!email) continue;
-    const key = email.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ email, userId: r.userId ?? null });
-  }
+  const add = (email: string | null | undefined, userId: string | null) => {
+    const e = (email || "").trim();
+    if (!e || seen.has(e.toLowerCase())) return;
+    seen.add(e.toLowerCase());
+    out.push({ email: e, userId });
+  };
+  for (const extra of tenant.enrollmentNotificationEmails ?? []) add(extra, null);
+  for (const r of rows) add(r.userEmail || r.emailInvited, r.userId ?? null);
   return out;
 }
 
@@ -87,256 +94,348 @@ interface SummaryRow {
   label: string;
   value: string;
 }
+type Section = { title: string; rows: SummaryRow[] };
 
-const KNOWN_SNAPSHOT_KEYS = new Set([
-  "id", "name", "price", "priceCents", "creditClassroom", "creditDrive",
-  "minAge", "description", "providerName", "providerUrl",
-  "imageUrl", "tenantId", "active", "sortOrder", "createdAt", "updatedAt",
-]);
-
-function humanizeKey(k: string): string {
-  return k.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (c) => c.toUpperCase());
-}
-
-function snapshotExtraRows(snap: any): SummaryRow[] {
-  if (!snap || typeof snap !== "object") return [];
-  return Object.entries(snap)
-    .filter(([k, v]) => !KNOWN_SNAPSHOT_KEYS.has(k) && v != null && typeof v !== "object")
-    .map(([k, v]) => ({ label: humanizeKey(k), value: String(v) }));
-}
-
-function buildSummary(args: {
-  enrollment: any;
-  pkg: any;
-  location: any;
-  onlineCourse: any;
-  cartCustomerSnapshot: any;
-  cartId: string | null;
-  payments: any[];
-}): { sections: { title: string; rows: SummaryRow[] }[]; headline: string; packageName: string } {
-  const e = args.enrollment;
-  const snap = (e.packageSnapshotJson as any) || {};
-  const cartSnap = (args.cartCustomerSnapshot as any) || {};
-
-  const phone = e.phone || cartSnap.phone || null;
-  const dob = e.dateOfBirth || cartSnap.dateOfBirth || null;
-  const parentName = e.parentName || cartSnap.parentName || null;
-  const parentEmail = e.parentEmail || cartSnap.parentEmail || null;
-  const parentPhone = e.parentPhone || cartSnap.parentPhone || null;
-  const studentNotes = cartSnap.notes || null;
-  const adminNotes = e.notes || null;
-
-  const age = ageAtPurchase(dob, e.createdAt);
-  const isMinor = age != null && age < 18;
-
-  const sortedPayments = [...args.payments].sort(
-    (a, b) => new Date(b.completedAt || b.createdAt).getTime() - new Date(a.completedAt || a.createdAt).getTime(),
-  );
-  const completed = sortedPayments.find((p) => p.status === "COMPLETED");
-  const featured = completed || sortedPayments[0] || null;
-  const priorAttempts = featured ? sortedPayments.length - 1 : 0;
-
-  const priceCents = e.priceSnapshotCents ??
-    (snap.priceCents != null ? Number(snap.priceCents) : (snap.price != null ? Math.round(Number(snap.price) * 100) : null));
-  const packageName = snap.name || args.pkg?.name || "Enrollment";
-
-  const sections: { title: string; rows: SummaryRow[] }[] = [];
-
-  sections.push({
-    title: `Student${isMinor ? " (minor at purchase)" : ""}`,
-    rows: [
-      { label: "First name", value: dash(e.firstName) },
-      { label: "Last name", value: dash(e.lastName) },
-      { label: "Email", value: dash(e.email) },
-      { label: "Phone", value: dash(phone) },
-      {
-        label: "Date of birth",
-        value: dob ? `${dob}${age != null ? ` (age ${age} at purchase)` : ""}` : "—",
-      },
-    ],
-  });
-
-  sections.push({
-    title: "Parent / Guardian",
-    rows: parentName || parentEmail || parentPhone
-      ? [
-          { label: "Name", value: dash(parentName) },
-          { label: "Email", value: dash(parentEmail) },
-          { label: "Phone", value: dash(parentPhone) },
-        ]
-      : [{ label: "", value: isMinor
-          ? "No parent / guardian info on file (student is a minor — please collect)."
-          : "No parent / guardian info provided." }],
-  });
-
-  sections.push({
-    title: "Location",
-    rows: [{ label: "Name", value: dash(args.location?.name) }],
-  });
-
-  const pkgRows: SummaryRow[] = [
-    { label: "Package name", value: dash(packageName) },
-    { label: "Price at purchase", value: formatCents(priceCents, e.currencySnapshot || "USD") },
-    {
-      label: "Classroom credits",
-      value: dash(snap.creditClassroom != null ? String(snap.creditClassroom)
-        : (args.pkg?.creditClassroom != null ? String(args.pkg.creditClassroom) : null)),
-    },
-    {
-      label: "Drive credits",
-      value: dash(snap.creditDrive != null ? String(snap.creditDrive)
-        : (args.pkg?.creditDrive != null ? String(args.pkg.creditDrive) : null)),
-    },
-    { label: "Minimum age", value: dash(snap.minAge != null ? String(snap.minAge) : null) },
-  ];
-  if (args.onlineCourse) {
-    pkgRows.push({
-      label: "Online course",
-      value: `${args.onlineCourse.name}${args.onlineCourse.providerName ? ` (${args.onlineCourse.providerName})` : ""}`,
-    });
-  }
-  const providerUrl = args.onlineCourse?.providerUrl || snap.providerUrl || null;
-  if (providerUrl) pkgRows.push({ label: "Provider URL", value: providerUrl });
-  for (const extra of snapshotExtraRows(snap)) pkgRows.push(extra);
-  sections.push({ title: "Package", rows: pkgRows });
-
-  const noteRows: SummaryRow[] = [];
-  noteRows.push({ label: "From student (at checkout)", value: dash(studentNotes) });
-  if (adminNotes) noteRows.push({ label: "Internal admin notes", value: adminNotes });
-  sections.push({ title: "Notes", rows: noteRows });
-
-  const paymentRows: SummaryRow[] = [];
-  if (!featured) {
-    paymentRows.push({ label: "", value: "No payment attempts on file." });
-  } else {
-    paymentRows.push({ label: "Method", value: `${featured.provider} — ${featured.status}${!completed ? " (no completed payment yet)" : ""}` });
-    paymentRows.push({ label: "Amount", value: formatCents(featured.amountCents, featured.currency) });
-    paymentRows.push({ label: "When", value: formatDateTime(featured.completedAt || featured.createdAt) });
-    if (featured.providerPaymentId) paymentRows.push({ label: "Reference", value: String(featured.providerPaymentId) });
-    if (featured.receiverName) paymentRows.push({ label: "Received by", value: String(featured.receiverName) });
-    if (priorAttempts > 0) {
-      paymentRows.push({ label: "Earlier attempts", value: `${priorAttempts} on file` });
-    }
-  }
-  sections.push({ title: "Payment", rows: paymentRows });
-
-  const timelineRows: SummaryRow[] = [
-    { label: "Submitted", value: formatDateTime(e.createdAt) },
-    { label: "Last updated", value: formatDateTime(e.updatedAt) },
-    { label: "Activated", value: formatDateTime(e.activatedAt) },
-    { label: "Confirmation email", value: formatDateTime(e.confirmationEmailSentAt) },
-    { label: "Payment receipt email", value: formatDateTime(e.paymentReceivedEmailSentAt) },
-  ];
-  if (args.cartId) timelineRows.push({ label: "Originating cart", value: args.cartId });
-  sections.push({ title: "Timeline", rows: timelineRows });
-
-  const headline = `${e.firstName || ""} ${e.lastName || ""}`.trim() || e.email || `Enrollment #${e.id}`;
-  return { sections, headline, packageName };
-}
-
-function renderTextBody(headline: string, schoolName: string, sections: { title: string; rows: SummaryRow[] }[]): string {
-  const lines: string[] = [];
-  lines.push(`New enrollment at ${schoolName}`);
-  lines.push(headline);
-  lines.push("");
+function renderTextBody(banner: string, schoolName: string, sections: Section[], link: string | null): string {
+  const lines: string[] = [banner, schoolName, ""];
   for (const sec of sections) {
     lines.push(`== ${sec.title} ==`);
-    for (const row of sec.rows) {
-      if (!row.label) lines.push(row.value);
-      else lines.push(`${row.label}: ${row.value}`);
-    }
+    for (const row of sec.rows) lines.push(row.label ? `${row.label}: ${row.value}` : row.value);
     lines.push("");
   }
+  if (link) lines.push(`Open in admin: ${link}`);
   return lines.join("\n").trimEnd();
 }
 
-function renderHtmlBody(headline: string, schoolName: string, sections: { title: string; rows: SummaryRow[] }[]): string {
+function renderHtmlBody(banner: string, bannerColor: string, schoolName: string, sections: Section[], link: string | null): string {
   const parts: string[] = [];
   parts.push(`<p style="margin:0 0 4px 0;color:#6b7280;font-size:12px">${escapeHtml(schoolName)}</p>`);
-  parts.push(`<h2 style="margin:0 0 16px 0;font-size:18px">New enrollment — ${escapeHtml(headline)}</h2>`);
+  parts.push(
+    `<div style="margin:0 0 16px 0;padding:10px 14px;border-radius:6px;background:${bannerColor};color:#fff;font-size:16px;font-weight:600">${escapeHtml(banner)}</div>`,
+  );
   for (const sec of sections) {
     parts.push(`<h3 style="margin:18px 0 6px 0;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#374151">${escapeHtml(sec.title)}</h3>`);
     parts.push(`<table style="border-collapse:collapse;width:100%;font-size:14px;border:1px solid #e5e7eb;border-radius:6px">`);
     for (const row of sec.rows) {
       if (!row.label) {
-        parts.push(`<tr><td colspan="2" style="padding:8px 12px;color:#6b7280">${escapeHtml(row.value)}</td></tr>`);
+        parts.push(`<tr><td colspan="2" style="padding:8px 12px;color:#374151;white-space:pre-wrap">${escapeHtml(row.value)}</td></tr>`);
       } else {
         parts.push(
           `<tr>` +
-          `<td style="padding:6px 12px;color:#6b7280;width:40%;border-top:1px solid #f3f4f6">${escapeHtml(row.label)}</td>` +
+          `<td style="padding:6px 12px;color:#6b7280;width:40%;border-top:1px solid #f3f4f6;vertical-align:top">${escapeHtml(row.label)}</td>` +
           `<td style="padding:6px 12px;border-top:1px solid #f3f4f6;white-space:pre-wrap">${escapeHtml(row.value)}</td>` +
-          `</tr>`
+          `</tr>`,
         );
       }
     }
     parts.push(`</table>`);
   }
+  if (link) {
+    parts.push(`<p style="margin:20px 0 0 0"><a href="${escapeHtml(link)}" style="color:#2563eb">Open in admin →</a></p>`);
+  }
   return parts.join("");
 }
 
-// Sends a "new enrollment" summary email to all active tenant_admin and
-// office_manager members of the tenant. Idempotent via an atomic claim of
-// enrollments.adminNotificationEmailSentAt (so concurrent webhook retries or
-// restarts won't double-send).
+/** Sends to every recipient; true when at least one send went through. */
+async function deliver(tenant: Tenant, msg: { subject: string; body: string; html: string }, label: string): Promise<boolean> {
+  const recipients = await getAdminRecipients(tenant);
+  if (recipients.length === 0) {
+    console.warn(`[OwnerNotification] ${label}: tenant ${tenant.id} has no admin or notification recipients`);
+    return false;
+  }
+  let delivered = false;
+  for (const r of recipients) {
+    try {
+      const res = await sendEmail({ tenantId: tenant.id, to: r.email, recipientUserId: r.userId, ...msg });
+      if (res.status === "sent" || res.status === "skipped_no_provider") delivered = true;
+      else console.error(`[OwnerNotification] ${label}: send to ${r.email} ${res.status}${res.errorMsg ? `: ${res.errorMsg}` : ""}`);
+    } catch (err) {
+      console.error(`[OwnerNotification] ${label}: send to ${r.email} failed:`, err);
+    }
+  }
+  return delivered;
+}
+
+function studentSections(p: {
+  firstName?: string | null;
+  lastName?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  dateOfBirth?: string | null;
+  parentName?: string | null;
+  parentEmail?: string | null;
+  parentPhone?: string | null;
+  createdAt?: Date | string | null;
+}): Section[] {
+  const age = ageAtPurchase(p.dateOfBirth, p.createdAt);
+  const isMinor = age != null && age < 18;
+  const sections: Section[] = [
+    {
+      title: `Student${isMinor ? " (minor)" : ""}`,
+      rows: [
+        { label: "Name", value: dash(`${p.firstName || ""} ${p.lastName || ""}`) },
+        { label: "Email", value: dash(p.email) },
+        { label: "Phone", value: dash(p.phone) },
+        ...(p.dateOfBirth ? [{ label: "Date of birth", value: `${p.dateOfBirth}${age != null ? ` (age ${age})` : ""}` }] : []),
+      ],
+    },
+  ];
+  if (p.parentName || p.parentEmail || p.parentPhone) {
+    sections.push({
+      title: "Parent / Guardian",
+      rows: [
+        { label: "Name", value: dash(p.parentName) },
+        { label: "Email", value: dash(p.parentEmail) },
+        { label: "Phone", value: dash(p.parentPhone) },
+      ],
+    });
+  } else if (isMinor) {
+    sections.push({ title: "Parent / Guardian", rows: [{ label: "", value: "No parent / guardian on file — student is a minor, please collect." }] });
+  }
+  return sections;
+}
+
+type EnrollmentState = "PAID" | "CASH DUE" | "NEW";
+
+function enrollmentState(ctx: EnrollmentContext): EnrollmentState {
+  if (ctx.payment?.status === "COMPLETED") return "PAID";
+  if (ctx.payment?.provider === "CASH" && ["CREATED", "PENDING"].includes(ctx.payment.status)) return "CASH DUE";
+  return "NEW";
+}
+
+const BANNERS: Record<EnrollmentState, { text: string; color: string }> = {
+  PAID: { text: "PAID — payment completed, enrollment confirmed", color: "#15803d" },
+  "CASH DUE": { text: "CASH DUE — seat reserved, payment not received yet", color: "#b45309" },
+  NEW: { text: "NEW ENROLLMENT — no payment recorded", color: "#4b5563" },
+};
+
+function buildEnrollmentMessage(ctx: EnrollmentContext, state: EnrollmentState) {
+  const { enrollment: e, tenant, payment, offering } = ctx;
+  const snap = (e.packageSnapshotJson as any) || {};
+  const packageName = snap.name || "Enrollment";
+  const dates = classDateLines(ctx);
+  const name = `${e.firstName || ""} ${e.lastName || ""}`.trim() || e.email;
+  const ref = ctx.reference;
+
+  const what = offering?.name && offering.name !== packageName ? `${packageName}: ${offering.name}` : packageName;
+  const firstStart = ctx.sessions[0]?.startAt ?? (offering ? new Date(offering.startsAt) : null);
+  const amount = payment ? formatCents(payment.amountCents, payment.currency) : formatCents(e.priceSnapshotCents, e.currencySnapshot || "USD");
+  const subject =
+    `${state} — New enrollment: ${name} — ${what}${firstStart ? `, ${shortDate(firstStart, ctx.timezone)}` : ""}` +
+    ` — ${amount}${ref ? ` (ref ${ref})` : ""}`;
+
+  const sections: Section[] = [
+    ...studentSections({ ...e, createdAt: e.createdAt }),
+    {
+      title: "Class & schedule",
+      rows: [
+        { label: "Course", value: dash(packageName) },
+        ...(offering ? [{ label: "Class", value: offering.name }] : []),
+        { label: dates.length > 1 ? "Dates" : "Date", value: dates.length ? dates.join("\n") : "No class date (scheduled separately)" },
+        { label: "Location", value: dash(locationLine(ctx.location)) },
+        ...(snap.providerUrl ? [{ label: "Online course link", value: String(snap.providerUrl) }] : []),
+      ],
+    },
+  ];
+
+  const paymentRows: SummaryRow[] = [{ label: "Reference", value: dash(ref) }];
+  if (!payment) {
+    paymentRows.push({ label: "", value: "No payment on file." });
+  } else {
+    paymentRows.push(
+      { label: "Status", value: payment.status === "COMPLETED" ? "Paid" : `${payment.status} — not paid` },
+      { label: "Amount", value: formatCents(payment.amountCents, payment.currency) },
+      ...(payment.serviceFeeCents ? [{ label: "Of which service fee", value: formatCents(payment.serviceFeeCents, payment.currency) }] : []),
+      ...(payment.cartId && payment.status === "COMPLETED" ? [{ label: "Covers", value: "the whole order (cart)" }] : []),
+      { label: "Method", value: paymentMethodLabel(payment.provider) },
+      { label: payment.status === "COMPLETED" ? "Paid at" : "Started at", value: formatLocalDateTime(payment.completedAt || payment.createdAt, ctx.timezone) },
+      ...(payment.providerPaymentId ? [{ label: "Transaction ID", value: String(payment.providerPaymentId) }] : []),
+      ...(payment.receiverName ? [{ label: "Received by", value: String(payment.receiverName) }] : []),
+      ...(ctx.payments.length > 1 ? [{ label: "Earlier attempts", value: `${ctx.payments.length - 1} on file` }] : []),
+    );
+  }
+  sections.push({ title: "Payment", rows: paymentRows });
+  if (e.notes) sections.push({ title: "Notes", rows: [{ label: "", value: e.notes }] });
+
+  const link = `${platformBaseUrl()}/admin/enrollments?focusId=${e.id}`;
+  const banner = BANNERS[state];
+  return {
+    subject,
+    body: renderTextBody(banner.text, tenant.name, sections, link),
+    html: renderHtmlBody(banner.text, banner.color, tenant.name, sections, link),
+  };
+}
+
+// Owner notification for one enrollment, labelled by its payment state. The
+// PAID notification is sent at most once per enrollment: the slot is claimed
+// atomically (concurrent webhook retries) and released again if nothing could
+// be delivered, so it can be retried instead of silently lost. CASH DUE / NEW
+// come from single request paths and are not deduplicated.
 export async function sendAdminEnrollmentNotification(
   enrollmentId: number,
   tenantId: number,
 ): Promise<void> {
-  const tenant = await storage.getTenant(tenantId);
-  if (!tenant) return;
-  if (tenant.adminEnrollmentNotificationsEnabled === false) return;
+  const ctx = await loadEnrollmentContext(enrollmentId, tenantId);
+  if (!ctx || ctx.tenant.adminEnrollmentNotificationsEnabled === false) return;
+  const state = enrollmentState(ctx);
 
-  // Atomically claim the send slot to prevent duplicate sends.
-  const [claimed] = await db.update(enrollments)
-    .set({ adminNotificationEmailSentAt: new Date() })
-    .where(and(
-      eq(enrollments.id, enrollmentId),
-      eq(enrollments.tenantId, tenantId),
-      isNull(enrollments.adminNotificationEmailSentAt),
-    ))
-    .returning();
-  if (!claimed) return;
-
-  const recipients = await getAdminRecipients(tenantId);
-  if (recipients.length === 0) return;
-
-  const enrollment = await storage.getEnrollmentById(enrollmentId, tenantId);
-  if (!enrollment) return;
-
-  const [pkg, location, paymentsList, onlineCourse, cart] = await Promise.all([
-    enrollment.packageId ? storage.getPackage(enrollment.packageId) : Promise.resolve(undefined),
-    enrollment.locationId ? storage.getLocation(enrollment.locationId) : Promise.resolve(undefined),
-    storage.getPaymentsByEnrollment(enrollmentId),
-    enrollment.onlineCourseId ? storage.getOnlineCourse(enrollment.onlineCourseId) : Promise.resolve(undefined),
-    enrollment.cartId ? storage.getCart(enrollment.cartId) : Promise.resolve(undefined),
-  ]);
-
-  const { sections, headline, packageName } = buildSummary({
-    enrollment,
-    pkg: pkg ?? null,
-    location: location ?? null,
-    onlineCourse: onlineCourse ?? null,
-    cartCustomerSnapshot: cart?.customerSnapshotJson ?? null,
-    cartId: enrollment.cartId ?? null,
-    payments: paymentsList,
-  });
-
-  const subject = `[${tenant.name}] New enrollment: ${headline} — ${packageName}`;
-  const body = renderTextBody(headline, tenant.name, sections);
-  const html = renderHtmlBody(headline, tenant.name, sections);
-
-  for (const r of recipients) {
-    try {
-      await sendEmail({
-        tenantId,
-        to: r.email,
-        recipientUserId: r.userId,
-        subject,
-        body,
-        html,
-      });
-    } catch (err) {
-      console.error(`[AdminEnrollmentNotification] send to ${r.email} failed:`, err);
-    }
+  if (state === "PAID") {
+    const [claimed] = await db.update(enrollments)
+      .set({ adminNotificationEmailSentAt: new Date() })
+      .where(and(
+        eq(enrollments.id, enrollmentId),
+        eq(enrollments.tenantId, tenantId),
+        isNull(enrollments.adminNotificationEmailSentAt),
+      ))
+      .returning({ id: enrollments.id });
+    if (!claimed) return;
   }
+
+  const delivered = await deliver(ctx.tenant, buildEnrollmentMessage(ctx, state), `${state} enrollment#${enrollmentId}`);
+  if (!delivered && state === "PAID") {
+    await db.update(enrollments)
+      .set({ adminNotificationEmailSentAt: null })
+      .where(and(eq(enrollments.id, enrollmentId), eq(enrollments.tenantId, tenantId)));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Checkout-level notifications (no confirmed enrollment exists): a cash cart
+// reservation, or a card checkout that was never paid.
+
+export type CheckoutNotificationKind = "cash_due" | "not_paid";
+const CLAIM_KEY: Record<CheckoutNotificationKind, string> = {
+  cash_due: "cashDueNotifiedAt",
+  not_paid: "notPaidNotifiedAt",
+};
+
+async function claimPaymentNotification(paymentId: number, key: string): Promise<boolean> {
+  const rows = await db.update(payments)
+    .set({ metadataJson: sql`coalesce(${payments.metadataJson}, '{}'::jsonb) || jsonb_build_object(${key}::text, now())` } as any)
+    .where(and(eq(payments.id, paymentId), sql`not (coalesce(${payments.metadataJson}, '{}'::jsonb) ? ${key})`))
+    .returning({ id: payments.id });
+  return rows.length > 0;
+}
+
+async function releasePaymentNotification(paymentId: number, key: string): Promise<void> {
+  await db.update(payments)
+    .set({ metadataJson: sql`${payments.metadataJson} - ${key}::text` } as any)
+    .where(eq(payments.id, paymentId));
+}
+
+async function checkoutCustomer(payment: Payment) {
+  if (payment.enrollmentId) {
+    const e = await storage.getEnrollmentById(payment.enrollmentId, payment.tenantId);
+    if (e) return { ...e, createdAt: payment.createdAt };
+  }
+  if (payment.cartId) {
+    const cart = await storage.getCart(payment.cartId);
+    const c = (cart?.customerSnapshotJson as any) || {};
+    return { ...c, createdAt: payment.createdAt };
+  }
+  return { createdAt: payment.createdAt };
+}
+
+export async function sendCheckoutOwnerNotification(paymentId: number, kind: CheckoutNotificationKind): Promise<void> {
+  const payment = await storage.getPayment(paymentId);
+  if (!payment) return;
+  const tenant = await storage.getTenant(payment.tenantId);
+  if (!tenant || tenant.adminEnrollmentNotificationsEnabled === false) return;
+  if (kind === "not_paid" && tenant.abandonedCheckoutNotificationsEnabled === false) return;
+
+  const key = CLAIM_KEY[kind];
+  if (!(await claimPaymentNotification(payment.id, key))) return;
+
+  const timezone = tenant.timezone || "America/Chicago";
+  const customer = await checkoutCustomer(payment);
+  const purchase = (((payment.metadataJson as any)?.purchase) || []) as PurchaseItem[];
+  const itemLines = purchase.map((it) =>
+    [
+      it.className && it.className !== it.name ? `${it.name}: ${it.className}` : it.name,
+      it.locationName,
+      it.startsAt ? formatClassDate(it.startsAt, it.timezone || timezone) : null,
+    ].filter(Boolean).join(" — "),
+  );
+  const first = purchase[0];
+  const name = `${customer.firstName || ""} ${customer.lastName || ""}`.trim() || customer.email || "Unknown customer";
+  const what = first
+    ? `${first.className && first.className !== first.name ? first.className : first.name}${first.startsAt ? `, ${shortDate(first.startsAt, first.timezone || timezone)}` : ""}`
+    : "checkout";
+  const amount = formatCents(payment.amountCents, payment.currency);
+  const ref = payment.reference ? ` (ref ${payment.reference})` : "";
+
+  const subject = kind === "not_paid"
+    ? `NOT PAID — checkout not completed: ${name}${customer.phone ? `, ${customer.phone}` : ""} — ${what} — ${amount}${ref}`
+    : `CASH DUE — reservation: ${name} — ${what} — ${amount}${ref}`;
+  const banner = kind === "not_paid"
+    ? { text: "NOT PAID — this customer started checking out but did not pay", color: "#b91c1c" }
+    : { text: "CASH DUE — seat requested, cash payment not received yet", color: "#b45309" };
+  const guidance = kind === "not_paid"
+    ? "No payment was taken, no enrollment was confirmed and no seat is held. They may have had trouble paying — consider following up."
+    : "Nothing is confirmed until you record the cash payment in Admin → Enrollments → Pending cash.";
+
+  const sections: Section[] = [
+    { title: "What happened", rows: [{ label: "", value: guidance }] },
+    ...studentSections(customer),
+    { title: "What they chose", rows: itemLines.length ? itemLines.map((l) => ({ label: "", value: l })) : [{ label: "", value: "—" }] },
+    {
+      title: "Checkout",
+      rows: [
+        { label: "Reference", value: dash(payment.reference) },
+        { label: "Amount", value: amount },
+        { label: "Method", value: paymentMethodLabel(payment.provider) },
+        { label: "Started at", value: formatLocalDateTime(payment.createdAt, timezone) },
+      ],
+    },
+  ];
+  const link = `${platformBaseUrl()}/admin/enrollments`;
+  const delivered = await deliver(
+    tenant,
+    {
+      subject,
+      body: renderTextBody(banner.text, tenant.name, sections, link),
+      html: renderHtmlBody(banner.text, banner.color, tenant.name, sections, link),
+    },
+    `${kind} payment#${payment.id}`,
+  );
+  if (!delivered) await releasePaymentNotification(payment.id, key);
+}
+
+// Card checkouts that were started but not paid within `olderThanHours`, and
+// not since paid some other way, get one NOT PAID notification. Only recent
+// checkouts qualify, so turning this on never mails out a historical backlog.
+export async function notifyAbandonedCheckouts(tenantId: number, olderThanHours: number): Promise<number> {
+  const now = Date.now();
+  const candidates = await db.select().from(payments).where(and(
+    eq(payments.tenantId, tenantId),
+    inArray(payments.provider, ["STRIPE", "PAYPAL"]),
+    inArray(payments.status, ["CREATED", "PENDING", "EXPIRED", "FAILED"]),
+    lt(payments.createdAt, new Date(now - olderThanHours * 3600_000)),
+    gt(payments.createdAt, new Date(now - 48 * 3600_000)),
+    sql`not (coalesce(${payments.metadataJson}, '{}'::jsonb) ? 'notPaidNotifiedAt')`,
+  ));
+
+  let sent = 0;
+  for (const p of candidates) {
+    const customer = await checkoutCustomer(p);
+    const email = String(customer.email || "").trim().toLowerCase();
+    // Paid on a later attempt (same cart, same enrollment or same customer)?
+    const later = await db.execute(sql`
+      select 1 from payments p2
+      left join enrollments e2 on e2.id = p2.enrollment_id
+      left join carts c2 on c2.id = p2.cart_id
+      where p2.tenant_id = ${tenantId} and p2.status = 'COMPLETED' and p2.id <> ${p.id}
+        and (
+          (${p.cartId}::text is not null and p2.cart_id = ${p.cartId}::text)
+          or (${p.enrollmentId}::int is not null and p2.enrollment_id = ${p.enrollmentId}::int)
+          or (${email} <> '' and p2.created_at >= ${p.createdAt}
+              and lower(coalesce(e2.email, c2.customer_snapshot_json->>'email', '')) = ${email})
+        )
+      limit 1`);
+    const rows = ((later as { rows?: unknown[] }).rows ?? (later as unknown as unknown[])) as unknown[];
+    if (rows.length > 0) continue;
+    await sendCheckoutOwnerNotification(p.id, "not_paid");
+    sent++;
+  }
+  return sent;
 }

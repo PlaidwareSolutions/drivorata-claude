@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { OwnerNotificationSettingsCard } from "@/components/admin/owner-notification-settings";
 import { useTenant } from "@/lib/tenant-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
@@ -1205,11 +1206,13 @@ function CommunicationsTab({ tenantId }: { tenantId: number }) {
 
   return (
     <div className="space-y-6">
+      <OwnerNotificationSettingsCard tenantId={tenantId} />
       <Card>
         <CardHeader>
           <CardTitle>Enrollment & Payment Emails</CardTitle>
           <CardDescription>
             Customize the automatic emails students receive when they enroll and when their payment lands. Leave a field blank to use the default copy.
+            Every email also includes the enrollment details (reference, class, dates, location, amount) — use <code>{"{{enrollmentDetails}}"}</code> to place them; otherwise they're added at the end.
           </CardDescription>
         </CardHeader>
       </Card>

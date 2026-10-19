@@ -1,5 +1,6 @@
 import { pool } from "../db";
 import { storage } from "../storage";
+import { notifyAbandonedCheckouts } from "../admin-enrollment-notifications";
 import { runStaleCreditRemindersAllTenants } from "../stale-credit-reminders";
 import { runCartRemindersAllTenants } from "../cart-reminders";
 
@@ -65,9 +66,17 @@ export async function runExpiryCleanupAllTenants(): Promise<void> {
   const allTenants = await storage.getAllTenants();
   for (const tenant of allTenants) {
     const settings = await storage.getTenantPaymentSettings(tenant.id);
+    const hours = settings?.expireAfterHours ?? 2;
+    // Owner follow-up for card checkouts started but not paid. Independent of
+    // auto-expiry: it only reads, and dedupes per payment.
+    try {
+      const n = await notifyAbandonedCheckouts(tenant.id, Math.max(1, hours));
+      if (n > 0) console.log(`[Cleanup] Sent ${n} NOT PAID owner notification(s) for tenant ${tenant.id}`);
+    } catch (err) {
+      console.error(`[Cleanup] NOT PAID notifications failed for tenant ${tenant.id}:`, err);
+    }
     const autoExpireEnabled = settings?.autoExpireEnabled ?? true;
     if (!autoExpireEnabled) continue;
-    const hours = settings?.expireAfterHours ?? 2;
     const stale = await storage.getExpiredPendingEnrollmentsByTenant(tenant.id, hours);
     for (const enrollment of stale) {
       await storage.expireEnrollment(enrollment.id, tenant.id);

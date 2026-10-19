@@ -2,8 +2,6 @@ import { storage } from "../storage";
 import type { Payment } from "@shared/schema";
 import { retrieveStripeCheckoutSession } from "./stripe-adapter";
 import { activateCart, activateEnrollment } from "./activation-service";
-import { sendAdminEnrollmentNotification } from "../admin-enrollment-notifications";
-import { fireAndForget } from "../enrollment-emails";
 
 // Recovery for card payments the provider took but Drivorata never confirmed
 // (before 2026-10-18 the Stripe webhook processed nothing). The provider is
@@ -177,14 +175,6 @@ export async function recoverPayment(o: RecoverOptions): Promise<RecoverResult> 
     const r = await activateEnrollment(payment.enrollmentId, payment.id, activationOpts);
     enrollmentIds = r.ok ? [r.enrollmentId] : [];
     if (!r.ok) errors = [r.error || "Activation failed"];
-    // activateCart sends the owner notification itself; the express path
-    // never did at activation time.
-    if (r.ok && o.notifyAdmin) {
-      fireAndForget(
-        () => sendAdminEnrollmentNotification(r.enrollmentId, payment.tenantId),
-        `admin_enrollment_notification recovery enrollment#${r.enrollmentId}`,
-      );
-    }
   }
 
   try {

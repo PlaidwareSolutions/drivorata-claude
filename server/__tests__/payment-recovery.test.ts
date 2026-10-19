@@ -283,7 +283,7 @@ test("sends the customer confirmation only when asked", async () => {
   assert.equal(r.status, 200, JSON.stringify(r.body));
   const after = await emailsTo(student.email);
   assert.equal(after.length, before + 1);
-  assert.match(after[after.length - 1].subject ?? "", /Payment received/);
+  assert.match(after[after.length - 1].subject ?? "", /payment received/i);
 });
 
 test("refuses when Stripe says the checkout was not paid, and records the expiry", async () => {

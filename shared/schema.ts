@@ -121,6 +121,11 @@ export const tenants = pgTable("tenants", {
   cartReminderHoursStage1: integer("cart_reminder_hours_stage1").default(1),
   cartReminderHoursStage2: integer("cart_reminder_hours_stage2").default(24),
   adminEnrollmentNotificationsEnabled: boolean("admin_enrollment_notifications_enabled").default(true),
+  // Extra inboxes for owner enrollment notifications, on top of the school's
+  // admins and office managers (e.g. the owner's personal address).
+  enrollmentNotificationEmails: text("enrollment_notification_emails").array(),
+  // Email the owner when a card checkout is started but never paid.
+  abandonedCheckoutNotificationsEnabled: boolean("abandoned_checkout_notifications_enabled").default(true),
   active: boolean("active").default(true),
   websiteEnabled: boolean("website_enabled").default(true),
   previewMode: boolean("preview_mode").default(false),

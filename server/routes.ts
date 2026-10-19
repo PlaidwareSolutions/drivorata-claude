@@ -72,7 +72,7 @@ import { describePurchase, purchaseItem } from "./payments/checkout-reference";
 import { handleInboundEmailWebhook } from "./inbound-email-webhook";
 import { activateEnrollment, activateCart, confirmEnrollmentManually } from "./payments/activation-service";
 import { sendEnrollmentReceived, sendEnrollmentReceivedForCart, fireAndForget, TEMPLATE_DEFS, type EnrollmentEmailKey } from "./enrollment-emails";
-import { sendAdminEnrollmentNotification } from "./admin-enrollment-notifications";
+import { sendAdminEnrollmentNotification, sendCheckoutOwnerNotification } from "./admin-enrollment-notifications";
 import { sendAdminContactNotification, sendContactConfirmationToSender, sendContactReplyEmail } from "./contact-message-notifications";
 import { getEffectiveSender } from "./email-service";
 import { insertTenantEmailTemplateSchema } from "@shared/schema";
@@ -5443,17 +5443,20 @@ export async function registerRoutes(
 
       const payment = await storage.createPayment(paymentData);
 
-      fireAndForget(
-        () => sendEnrollmentReceived(enrollment, tenant, payment),
-        `enrollment_received checkout/start #${enrollment.id}`,
-      );
-      fireAndForget(
-        () => sendAdminEnrollmentNotification(enrollment.id, tenant.id),
-        `admin_enrollment_notification checkout/start #${enrollment.id}`,
-      );
-
+      // Card checkouts send nothing yet: until the provider confirms payment
+      // this is not an enrollment. The customer confirmation and the owner's
+      // PAID notification go out from activation; an abandoned checkout gets a
+      // NOT PAID owner notification from the scheduler.
       if (provider === "CASH") {
         await storage.updatePayment(payment.id, { status: "PENDING" });
+        fireAndForget(
+          () => sendEnrollmentReceived(enrollment, tenant, payment),
+          `enrollment_received checkout/start #${enrollment.id}`,
+        );
+        fireAndForget(
+          () => sendAdminEnrollmentNotification(enrollment.id, tenant.id),
+          `admin_enrollment_notification (cash due) checkout/start #${enrollment.id}`,
+        );
         return res.json({ cashPayment: true, enrollmentId: enrollment.id, paymentId: payment.id, reference: payment.reference });
       }
 
@@ -6091,6 +6094,10 @@ export async function registerRoutes(
           () => sendEnrollmentReceivedForCart(tenant, cartForEmail, items, payment),
           `enrollment_received cart-checkout-cash cart=${cart.id}`,
         );
+        fireAndForget(
+          () => sendCheckoutOwnerNotification(payment.id, "cash_due"),
+          `owner cash_due cart=${cart.id}`,
+        );
         return res.json({ cashPayment: true, cartId: cart.id, paymentId: payment.id, reference: payment.reference });
       }
 
@@ -6415,17 +6422,17 @@ export async function registerRoutes(
 
       const payment = await storage.createPayment(paymentData);
 
-      fireAndForget(
-        () => sendEnrollmentReceived(enrollment, tenant, payment),
-        `enrollment_received online-course #${enrollment.id}`,
-      );
-      fireAndForget(
-        () => sendAdminEnrollmentNotification(enrollment.id, tenant.id),
-        `admin_enrollment_notification online-course #${enrollment.id}`,
-      );
-
+      // As in checkout/start: card checkouts send nothing until paid.
       if (provider === "CASH") {
         await storage.updatePayment(payment.id, { status: "PENDING" } as any);
+        fireAndForget(
+          () => sendEnrollmentReceived(enrollment, tenant, payment),
+          `enrollment_received online-course #${enrollment.id}`,
+        );
+        fireAndForget(
+          () => sendAdminEnrollmentNotification(enrollment.id, tenant.id),
+          `admin_enrollment_notification (cash due) online-course #${enrollment.id}`,
+        );
         return res.json({ cashPayment: true, enrollmentId: enrollment.id, paymentId: payment.id, reference: payment.reference });
       }
 
@@ -7297,14 +7304,22 @@ export async function registerRoutes(
     }
   });
 
-  // Admin enrollment notification settings (per-tenant toggle).
+  // Owner enrollment notification settings: on/off, extra inboxes on top of
+  // the school's admins, and the NOT PAID follow-up for abandoned checkouts.
+  function ownerNotificationSettings(tenant: { adminEnrollmentNotificationsEnabled: boolean | null; enrollmentNotificationEmails: string[] | null; abandonedCheckoutNotificationsEnabled: boolean | null }) {
+    return {
+      enabled: tenant.adminEnrollmentNotificationsEnabled !== false,
+      extraRecipients: tenant.enrollmentNotificationEmails ?? [],
+      notifyAbandonedCheckouts: tenant.abandonedCheckoutNotificationsEnabled !== false,
+    };
+  }
   app.get("/api/tenants/:tenantId/admin-enrollment-notifications/settings", isAuthenticated, async (req: any, res) => {
     try {
       const tenantId = parseInt(req.params.tenantId);
       if (!(await requireAdminMember(req, tenantId, res))) return;
       const tenant = await storage.getTenant(tenantId);
       if (!tenant) return res.status(404).json({ message: "Tenant not found" });
-      res.json({ enabled: tenant.adminEnrollmentNotificationsEnabled !== false });
+      res.json(ownerNotificationSettings(tenant));
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch settings" });
     }
@@ -7314,11 +7329,21 @@ export async function registerRoutes(
     try {
       const tenantId = parseInt(req.params.tenantId);
       if (!(await requireAdminMember(req, tenantId, res))) return;
-      const schema = z.object({ enabled: z.boolean() });
+      const schema = z.object({
+        enabled: z.boolean().optional(),
+        extraRecipients: z.array(z.string().trim().email()).max(10).optional(),
+        notifyAbandonedCheckouts: z.boolean().optional(),
+      });
       const parsed = schema.parse(req.body || {});
-      const updated = await storage.updateTenant(tenantId, {
-        adminEnrollmentNotificationsEnabled: parsed.enabled,
-      } as any);
+      const patch: Record<string, unknown> = {};
+      if (parsed.enabled !== undefined) patch.adminEnrollmentNotificationsEnabled = parsed.enabled;
+      if (parsed.extraRecipients !== undefined) {
+        patch.enrollmentNotificationEmails = Array.from(new Set(parsed.extraRecipients.map((e) => e.toLowerCase())));
+      }
+      if (parsed.notifyAbandonedCheckouts !== undefined) {
+        patch.abandonedCheckoutNotificationsEnabled = parsed.notifyAbandonedCheckouts;
+      }
+      const updated = await storage.updateTenant(tenantId, patch as any);
       try {
         await storage.createAuditEvent({
           tenantId,
@@ -7329,7 +7354,7 @@ export async function registerRoutes(
           details: parsed,
         });
       } catch {}
-      res.json({ enabled: updated?.adminEnrollmentNotificationsEnabled !== false });
+      res.json(updated ? ownerNotificationSettings(updated) : { enabled: true, extraRecipients: [], notifyAbandonedCheckouts: true });
     } catch (error: any) {
       if (error?.name === "ZodError") return res.status(400).json({ message: "Invalid input", errors: error.errors });
       res.status(500).json({ message: "Failed to update settings" });

@@ -67,6 +67,7 @@ import { createStripeCheckoutSession, testStripeConnection } from "./payments/st
 import { createPayPalOrder, capturePayPalOrder, testPayPalConnection } from "./payments/paypal-adapter";
 import { handleResendWebhook } from "./resend-webhook";
 import { handleStripeWebhook } from "./payments/stripe-webhook";
+import { checkUnconfirmedPayments, recoverPayment, RecoveryError } from "./payments/payment-recovery";
 import { handleInboundEmailWebhook } from "./inbound-email-webhook";
 import { activateEnrollment, activateCart, confirmEnrollmentManually } from "./payments/activation-service";
 import { sendEnrollmentReceived, sendEnrollmentReceivedForCart, fireAndForget, TEMPLATE_DEFS, type EnrollmentEmailKey } from "./enrollment-emails";
@@ -7156,6 +7157,67 @@ export async function registerRoutes(
     } catch (error) {
       console.error("List pending cash payments error:", error);
       res.status(500).json({ message: "Failed to fetch pending cash payments" });
+    }
+  });
+
+  // ===== UNCONFIRMED CARD PAYMENTS (recovery) =====
+  // Card checkouts the provider may have charged but Drivorata never
+  // confirmed. The admin checks them against Stripe, then recovers the paid
+  // ones; see server/payments/payment-recovery.ts.
+  async function requirePaymentAdmin(req: any, res: any): Promise<number | null> {
+    const tenantId = parseInt(req.params.tenantId);
+    const member = await storage.getTenantMember(tenantId, req.user.claims.sub);
+    if (!member || !["tenant_admin", "office_manager", "platform_admin"].includes(member.role)) {
+      res.status(403).json({ message: "Forbidden" });
+      return null;
+    }
+    return tenantId;
+  }
+
+  app.get("/api/tenants/:tenantId/unconfirmed-card-payments", isAuthenticated, async (req: any, res) => {
+    try {
+      const tenantId = await requirePaymentAdmin(req, res);
+      if (tenantId == null) return;
+      res.json(await storage.listUnconfirmedCardPayments(tenantId));
+    } catch (error) {
+      console.error("List unconfirmed card payments error:", error);
+      res.status(500).json({ message: "Failed to fetch unconfirmed card payments" });
+    }
+  });
+
+  app.post("/api/tenants/:tenantId/unconfirmed-card-payments/check", isAuthenticated, async (req: any, res) => {
+    try {
+      const tenantId = await requirePaymentAdmin(req, res);
+      if (tenantId == null) return;
+      const summary = await checkUnconfirmedPayments(tenantId, { onlyUnchecked: req.body?.onlyUnchecked === true });
+      res.json(summary);
+    } catch (error) {
+      console.error("Check unconfirmed card payments error:", error);
+      res.status(500).json({ message: "Failed to check payments with the provider" });
+    }
+  });
+
+  app.post("/api/tenants/:tenantId/payments/:paymentId/recover", isAuthenticated, async (req: any, res) => {
+    try {
+      const tenantId = await requirePaymentAdmin(req, res);
+      if (tenantId == null) return;
+      const body = req.body || {};
+      const result = await recoverPayment({
+        tenantId,
+        paymentId: parseInt(req.params.paymentId),
+        actorUserId: req.user.claims.sub,
+        notifyCustomer: body.notifyCustomer === true,
+        notifyAdmin: body.notifyAdmin === true,
+        bookSeat: typeof body.bookSeat === "boolean" ? body.bookSeat : undefined,
+        note: typeof body.note === "string" ? body.note.slice(0, 500) : undefined,
+      });
+      res.status(result.ok ? 200 : 207).json(result);
+    } catch (error) {
+      if (error instanceof RecoveryError) {
+        return res.status(error.status).json({ message: error.message });
+      }
+      console.error("Recover payment error:", error);
+      res.status(500).json({ message: "Failed to recover payment" });
     }
   });
 

@@ -43,6 +43,7 @@ import {
   MessageSquareQuote,
   Monitor,
   UserCircle,
+  CreditCard,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useTenant } from "@/lib/tenant-context";
@@ -139,6 +140,7 @@ export function AppSidebar() {
     { title: "Calendar", url: "/admin/calendar", icon: Calendar, show: isAdmin || isInstructor },
     { title: "Online Courses", url: "/admin/online-courses", icon: Monitor, show: isAdmin },
     { title: "Enrollments", url: "/admin/enrollments", icon: GraduationCap, show: isAdmin },
+    { title: "Payments", url: "/admin/payments", icon: CreditCard, show: isAdmin },
     { title: "Instructors", url: "/admin/instructor-availability", icon: Clock, show: isAdmin || isInstructor },
     { title: "Vehicles", url: "/admin/vehicles", icon: Car, show: isAdmin },
     { title: "Members", url: "/admin/members", icon: Users, show: isAdmin },

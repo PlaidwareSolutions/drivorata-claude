@@ -6737,6 +6737,11 @@ export async function registerRoutes(
       if (!member || !["tenant_admin", "office_manager", "platform_admin"].includes(member.role)) {
         return res.status(403).json({ message: "Forbidden" });
       }
+      // include=context adds the customer, items (class + date) and the
+      // enrollment, for the admin Payments page.
+      if (req.query.include === "context") {
+        return res.json(await storage.listPaymentsWithContext(tenantId));
+      }
       const filters: any = {};
       if (req.query.status) filters.status = req.query.status;
       if (req.query.provider) filters.provider = req.query.provider;

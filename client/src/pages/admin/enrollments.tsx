@@ -71,6 +71,7 @@ type Enrollment = {
   amountPaid: number | null;
   cartId: string | null;
   offeringId: number | null;
+  reference: string | null;
   isWaitlisted: boolean | null;
   createdAt: string;
   updatedAt: string;
@@ -793,7 +794,8 @@ export default function EnrollmentsPage() {
       const q = searchQuery.toLowerCase();
       const name = `${e.firstName} ${e.lastName}`.toLowerCase();
       const email = e.email.toLowerCase();
-      if (!name.includes(q) && !email.includes(q)) return false;
+      const ref = (e.reference || "").toLowerCase();
+      if (!name.includes(q) && !email.includes(q) && !ref.includes(q)) return false;
     }
     return true;
   });
@@ -1483,7 +1485,7 @@ export default function EnrollmentsPage() {
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search by name or email..."
+            placeholder="Search by name, email or reference..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-9"
@@ -1642,12 +1644,25 @@ export default function EnrollmentsPage() {
                                 ${(price / 100).toFixed(2)}
                               </p>
                             )}
-                            {enrollment.offeringId && (
-                              <p className="text-xs text-muted-foreground truncate" data-testid={`text-offering-name-${enrollment.id}`}>
-                                Cohort:{" "}
-                                <span data-testid={`link-offering-${enrollment.id}`}>
-                                  {offerings.find(o => o.id === enrollment.offeringId)?.name || `#${enrollment.offeringId}`}
-                                </span>
+                            {enrollment.offeringId && (() => {
+                              const off = offerings.find(o => o.id === enrollment.offeringId);
+                              return (
+                                <p className="text-xs text-muted-foreground truncate" data-testid={`text-offering-name-${enrollment.id}`}>
+                                  Class:{" "}
+                                  <span data-testid={`link-offering-${enrollment.id}`}>
+                                    {off?.name || `#${enrollment.offeringId}`}
+                                  </span>
+                                  {off?.startsAt && (
+                                    <span data-testid={`text-offering-date-${enrollment.id}`}>
+                                      {" "}— {new Date(off.startsAt).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
+                                    </span>
+                                  )}
+                                </p>
+                              );
+                            })()}
+                            {enrollment.reference && (
+                              <p className="text-xs text-muted-foreground font-mono" data-testid={`text-reference-${enrollment.id}`}>
+                                Ref {enrollment.reference}
                               </p>
                             )}
                             {(() => {

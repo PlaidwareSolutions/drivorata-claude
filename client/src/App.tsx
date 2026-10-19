@@ -36,6 +36,7 @@ import PackagesPage from "@/pages/admin/packages";
 import PackageDetailPage from "@/pages/admin/package-detail";
 import MembersPage from "@/pages/admin/members";
 import EnrollmentsPage from "@/pages/admin/enrollments";
+import PaymentsPage from "@/pages/admin/payments";
 import VehiclesPage from "@/pages/admin/vehicles";
 import AvailabilityPage from "@/pages/admin/availability";
 import SchedulePage from "@/pages/admin/schedule";
@@ -269,6 +270,7 @@ function AdminLayout() {
                 <Route path="/admin/online-courses" component={OnlineCoursesPage} />
                 <Route path="/admin/members" component={MembersPage} />
                 <Route path="/admin/enrollments" component={EnrollmentsPage} />
+                <Route path="/admin/payments" component={PaymentsPage} />
                 <Route path="/admin/vehicles" component={VehiclesPage} />
                 <Route path="/admin/instructor-availability" component={AvailabilityPage} />
                 <Route path="/admin/availability">

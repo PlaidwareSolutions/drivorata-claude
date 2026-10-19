@@ -2,7 +2,7 @@
 
 Shared between the **backend** (`drivorata-claude`, "B") and **storefront**
 (`drivorata-tenant-claude`, "T") agents. B maintains this file; T reads it.
-Status as of **2026-10-19 18:30 UTC**. Supersedes the per-repo plans where they differ.
+Status as of **2026-10-19 22:35 UTC**. Supersedes the per-repo plans where they differ.
 
 ## Where things stand
 
@@ -19,7 +19,7 @@ Status as of **2026-10-19 18:30 UTC**. Supersedes the per-repo plans where they 
 | Recovery of past paid payments | **Tool live; owner working through it** (Enrollments → Unconfirmed card payments). 96 charges / $20,573.50 since May. |
 
 Hosting: `drivorata.com` (backend) is on Railway since 2026-10-18, Cloudflare-proxied.
-The storefront `allagesdrivingschool.com` is still on Replit; its move is T's (NS flip pending).
+The storefront `allagesdrivingschool.com` and `www` are on Railway since **2026-10-19 22:13–22:29 UTC** (Wave 2). Both Replit deployments are kept intact (backend stopped, storefront still running) as the rollback until the watch window ends.
 
 ## What T's plan assumed that is already built (don't rebuild)
 
@@ -80,8 +80,8 @@ comes before the schedule work, and it also fixes `www`.
 | Wave | Gate to start | Backend (B) | Storefront (T) | You / owner |
 |---|---|---|---|---|
 | **1 — done** | — | Build **C1, C2, C6** + `headless-api.md`; deploy to `drivorata.com` | See "T — Wave 1 instructions" below | Approve a storefront cutover window (GoDaddy NS → Cloudflare); owner: start Authorize.net sandbox; owner: keep recovering payments |
-| **2 — storefront cutover (now)** | T Wave 1 merged ✔ + verified on the Railway host (W2-0); your window | Watch backend logs/API errors from the new storefront | Run its runbook: NS flip, apex + `www` CNAMEs, content-type checks, mail test; keep Replit stopped-not-deleted | Do the GoDaddy NS change (needs your login) |
-| **3 — schedule & thank-you** | C1 + C2 live ✔ **and** Wave 2 done (T may build on a branch now; merge only after Wave 2) | Support; adjust C1 fields on request | `/schedule` table + filters, Enroll Now deep link, "You're enrolling in" card, thank-you polls C2, home "next classes", nav CTA | Owner: fill in each class's description ("details") in admin |
+| **2 — storefront cutover: done** | ✔ | Watch backend logs/API errors from the new storefront | Run its runbook: NS flip, apex + `www` CNAMEs, content-type checks, mail test; keep Replit stopped-not-deleted | Do the GoDaddy NS change (needs your login) |
+| **3 — schedule & thank-you (now)** | C1 + C2 live ✔, Wave 2 done ✔ | Support; adjust C1 fields on request | `/schedule` table + filters, Enroll Now deep link, "You're enrolling in" card, thank-you polls C2, home "next classes", nav CTA | Owner: fill in each class's description ("details") in admin |
 | **4 — Authorize.net** | Sandbox credentials exist | Provider interface; `AUTHORIZE_NET` adapter (Accept Hosted, `invoiceNumber = reference`), webhook + reconcile, encrypted keys, void/refund | Card label/icon for `AUTHORIZE_NET`; no flow change | Owner: production API Login ID / Transaction Key / Signature Key (no owner login); confirm with Chase nothing else uses the current key |
 | **5 — Stripe off** | 3–5 clean days on Authorize.net | Disable Stripe for the tenant (instant rollback) | Remove Stripe-only bits | Owner OK |
 | **6 — traffic** | Wave 3 live | — (C6 already records campaigns) | GA4 + Google Ads conversion (`purchase` only when C2 says `paid`), titles/meta, JSON-LD per location, sitemap/robots | Owner: 3 Google Business Profiles with the right phones; Search Console; ads |
@@ -92,23 +92,28 @@ comes before the schedule work, and it also fixes `www`.
 - B verified T's test checkout: payment 325 `AA-MJK22L`, $364 incl. $15 fee, shows as *Checkout started* on the Payments page; the NOT PAID email went at 17:12 UTC to the three current admins and Resend reports all three **delivered**. (`kfnawaz+aads-wave1-test@gmail.com` got nothing — it isn't configured as an extra inbox; that's fine.)
 - Admins changed on request: `contact@teslamodcenter.com` disabled, `owner@tesladrivingcenter.com` admin role removed (instructor role kept, pending a decision).
 
-### T — current instructions (Wave 2 now; Wave 3 on a branch)
+### Wave 2 result (2026-10-19)
 
-1. **W2-0 now:** confirm the merged build on the Railway host, as your runbook says.
-2. **W2-1 — re-add both Railway custom domains, don't just confirm them.** They were registered on 2026-09-02. B hit this exact case on `drivorata.com` (registered 2026-08-29, DNS pointed 2026-10-18): Railway's certificate sat in *issuing* and never completed, and `railway domain certificate retry` refuses until an attempt has *failed*. With dns-only records and the apex's 2-year HSTS, a stuck certificate would be a hard, unclickable TLS error for returning visitors. So delete and re-add `allagesdrivingschool.com` and `www.allagesdrivingschool.com` in Railway right before the flip, and use the **new** targets and `_railway-verify` tokens in W2-2 and W2-5/6.
-3. **W2-2 now** (the Cloudflare zone isn't authoritative, so it's invisible to the public): add both `_railway-verify` TXT records; check every record is grey-cloud; also confirm the zone's **SSL/TLS mode is Full** (needed for plan B below).
-4. **W2-3 waits for you** (GoDaddy login). Then W2-4 with the mail test.
-5. **W2-5 is the certificate test.** If `www`'s Railway certificate isn't *valid* within ~15 minutes, stop and apply **plan B**: switch that record to **proxied (orange cloud)**; Cloudflare's certificate serves visitors and Full mode accepts Railway's. That's how `drivorata.com` runs today; Railway still sees the real visitor IP. Use the same for the apex in W2-6 if needed. Report which way it went.
-6. **Wave 3 — build now on a branch, don't merge until W2-6 is verified:** `/schedule` from C1 (filters: location, Teen/Adult; columns: Class · Dates (`dateRange`) · Time (`scheduleSummary`) · Location + phone · Details · Price · Seats/Full · **Enroll Now** using `enroll`), the "You're enrolling in" card, thank-you polling C2 every 3 s for up to 2 min using `ref` (`paid` → enrolled; `pending` → processing + location phone; `cash_due` → reserved, pay at office; `not_completed` → try again / call), home "next classes", nav CTA. Keep the cutover build small; merge Wave 3 after.
-7. Report back after W2-2 (with the new targets) and again after W2-6.
+- The Sept-2 Cloudflare zone had been **purged while pending** (Cloudflare NS answered REFUSED) — caught before the switch. Re-created in the Solutions@plaidware account (zone `397eb1b7…`), diffed against GoDaddy: 0 differences across 30 names × A/AAAA/CNAME/MX/TXT/SRV, all DNS-only, no DNSSEC.
+- Nameservers moved to `hassan`/`sureena.ns.cloudflare.com` at 21:45 UTC; registry and 1.1.1.1/8.8.8.8/9.9.9.9 confirmed; MX/autodiscover/SPF unchanged.
+- Railway domains re-added (new targets apex `7tz7dhxg`, www `u1tot9xa`); ownership verified 22:06 UTC.
+- `www` on Railway 22:09, certificate valid 22:11. Apex CNAME (flattened) 22:13, certificate valid by 22:29 — **plan B not needed**. B verified independently: both hosts serve `railway-hikari` with their own Let's Encrypt certificates, `/api/nope` is a JSON 404 (new app), and the backend's public API calls now come from the Railway storefront (none from Replit).
+- **Open:** the user's mail round-trip test.
+
+### T — current instructions (Wave 3)
+
+1. Merge **PR #3** (schedule page, "You're enrolling in" card, thank-you polling C2, home "Upcoming Classes", nav) once your own post-cutover checks pass.
+2. On the live site, verify `/schedule` (filters, 390px), one Enroll Now to the Stripe page without paying (student "TEST — do not contact"), and the thank-you page for that reference showing the *not completed / processing* state — not "enrolled".
+3. Update your runbook with the new targets and the zone-purge lesson. Keep Replit running; stopping it needs the user's explicit OK after the watch window.
+4. Report when Wave 3 is live; B then confirms schedule/status calls and the test reference from its logs.
 
 Decisions already made: Accept Hosted; Stripe and Authorize.net run side by side, then Stripe off; header/footer list all three phones.
 
 ## Open items for you
 
-1. **Pick the cutover window** for W2-3 (GoDaddy nameservers → `hassan`/`sureena.ns.cloudflare.com`). Quiet hours are best; the switch itself is traffic-neutral and reversible.
-2. **`owner@tesladrivingcenter.com` instructor role** at this school: keep or remove?
-3. **Ask the owner** why only Pasadena has published classes, and to fill in each class's description (it becomes the schedule's "Details" column).
-4. **Tell the owner** about Oct 18's $90 customer: three tries, NOT PAID emails for each; the third was in fact paid and is now confirmed (PAID email + customer confirmation sent 2026-10-19).
-5. **Rotate** the Railway Postgres and Neon passwords that appeared in a session transcript, and the provisioning credentials per the runbooks.
+1. **Mail test** — send from an outside account to a school mailbox and reply back; both must arrive.
+2. **Watch window** — after 24–48 h of normal traffic, decide on stopping/decommissioning Replit (backend deployment is already stopped; the storefront deployment still runs).
+3. **Ask the owner** why only Pasadena has published classes, and to fill in each class's description (the schedule's "Details" column).
+4. **Tell the owner** about Oct 18's $90 customer (three tries; the third was paid and is now confirmed).
+5. **Rotate** the Railway Postgres and Neon passwords that appeared in a session transcript; delete the Cloudflare tokens after the cutover (the new zone token expires on its own in about a week).
 6. Owner: start the Authorize.net sandbox (Wave 4); keep working through Unconfirmed card payments.

@@ -145,6 +145,7 @@ import {
   type InsertFaq,
 } from "@shared/schema";
 import { db } from "./db";
+import { generateReference } from "./payments/checkout-reference";
 import { eq, and, or, ilike, inArray, isNotNull, sql, desc, lt, count, type SQL } from "drizzle-orm";
 import {
   CartCheckoutError,
@@ -577,7 +578,7 @@ export interface IStorage {
   getEnrollmentsByCart(cartId: string): Promise<Enrollment[]>;
   createCartEnrollmentsAndBookAtomic(
     cartId: string,
-    payment: { id: number; tenantId: number; amountCents: number },
+    payment: { id: number; tenantId: number; amountCents: number; reference?: string | null },
     opts?: { bookOfferings?: boolean },
   ): Promise<{ ok: true; enrollments: Enrollment[]; bookings: { enrollmentId: number; booked: number; waitlisted: boolean }[] } | { ok: false; error: string }>;
   bookOfferingSessionsAtomic(enrollmentId: number, offeringId: number, tenantId: number, userId: string | null): Promise<{ booked: number; waitlisted: boolean }>;
@@ -1875,7 +1876,7 @@ export class DatabaseStorage implements IStorage {
 
   async createCartEnrollmentsAndBookAtomic(
     cartId: string,
-    payment: { id: number; tenantId: number; amountCents: number },
+    payment: { id: number; tenantId: number; amountCents: number; reference?: string | null },
     opts: { bookOfferings?: boolean } = {},
   ): Promise<{ ok: true; enrollments: Enrollment[]; bookings: { enrollmentId: number; booked: number; waitlisted: boolean }[] } | { ok: false; error: string }> {
     const cart = await this.getCart(cartId);
@@ -1947,6 +1948,7 @@ export class DatabaseStorage implements IStorage {
             },
             amountPaid: item.priceCents,
             cartId: cart.id,
+            reference: payment.reference ?? null,
             offeringId: item.offeringId ?? null,
           } as any).returning();
           createdEnrollments.push(enr);
@@ -2864,8 +2866,24 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createPayment(payment: InsertPayment): Promise<Payment> {
-    const [created] = await db.insert(payments).values(payment).returning();
-    return created;
+    // Every payment gets a checkout reference; the unique index settles the
+    // (very unlikely) collision, so retry with a fresh code on 23505.
+    const schoolName = payment.reference ? null : (await this.getTenant(payment.tenantId))?.name;
+    for (let attempt = 0; ; attempt++) {
+      const reference = payment.reference ?? generateReference(schoolName);
+      try {
+        const [created] = await db.insert(payments).values({ ...payment, reference }).returning();
+        if (created.enrollmentId) {
+          await db.update(enrollments)
+            .set({ reference: sql`coalesce(${enrollments.reference}, ${reference})` } as any)
+            .where(eq(enrollments.id, created.enrollmentId));
+        }
+        return created;
+      } catch (e: any) {
+        const isRefCollision = e?.code === "23505" && String(e?.constraint || e?.message).includes("payment_reference_unique");
+        if (!isRefCollision || payment.reference || attempt >= 4) throw e;
+      }
+    }
   }
 
   async getPayment(id: number): Promise<Payment | undefined> {

@@ -35,6 +35,7 @@ import {
   __setStripeCheckoutSessionForTests,
   __resetStripeCheckoutSessionForTests,
 } from "../payments/stripe-adapter";
+import { __setResendClientForTests } from "../email-service";
 
 let server: Server;
 let baseUrl: string;
@@ -385,4 +386,21 @@ test("payments list with context names the customer, class and enrollment", asyn
 
   const plain = await (await fetch(`${baseUrl}/api/tenants/${tenantId}/payments`, { headers: adminHeaders() })).json();
   assert.equal(plain.find((p: any) => p.id === paymentId).enrollment, undefined, "plain list unchanged");
+});
+
+test("replies go somewhere useful: customer → school, owner → student", async () => {
+  const sent: any[] = [];
+  __setResendClientForTests({ emails: { send: async (p: any) => { sent.push(p); return { data: { id: `msg_${sent.length}` } }; } } });
+  try {
+    const { paymentId, student } = await startClassCartCheckout("STRIPE");
+    await pay(paymentId);
+    await activateCart(paymentId);
+    await settle();
+    const toStudent = sent.find((p) => p.to === student.email);
+    const toOwner = sent.find((p) => p.to === adminEmail && /^PAID/.test(p.subject));
+    assert.equal(toStudent?.replyTo, "school@example.com", "customer replies reach the school");
+    assert.equal(toOwner?.replyTo, student.email, "owner replies reach the student");
+  } finally {
+    __setResendClientForTests(null);
+  }
 });

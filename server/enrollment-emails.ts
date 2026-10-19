@@ -172,6 +172,7 @@ async function sendOne(opts: {
   subject: string;
   body: string;
   trace: EmailTrace;
+  replyTo?: string | null;
 }): Promise<{ status: string; errorMsg?: string }> {
   const email = (opts.recipientEmail || "").trim();
   if (!email) return { status: "skipped_no_email" };
@@ -190,6 +191,8 @@ async function sendOne(opts: {
       "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
     },
     ...opts.trace,
+    // Replies reach the school, not our no-reply sender.
+    replyTo: opts.replyTo || opts.tenant.email || null,
   });
   return { status: res.status, errorMsg: res.errorMsg };
 }
@@ -200,10 +203,11 @@ async function sendToStudentAndParent(
   parentEmail: string | null | undefined,
   msg: { subject: string; body: string },
   trace: EmailTrace,
+  replyTo?: string | null,
 ) {
-  await sendOne({ tenant, recipientEmail: email, ...msg, trace });
+  await sendOne({ tenant, recipientEmail: email, ...msg, trace, replyTo });
   if (parentEmail && parentEmail.trim() && parentEmail.trim().toLowerCase() !== email.trim().toLowerCase()) {
-    await sendOne({ tenant, recipientEmail: parentEmail, ...msg, trace });
+    await sendOne({ tenant, recipientEmail: parentEmail, ...msg, trace, replyTo });
   }
 }
 
@@ -278,7 +282,7 @@ export async function sendEnrollmentReceived(
     kind: "customer_enrollment_received",
     enrollmentId: enrollment.id,
     paymentId: ctx.payment?.id ?? null,
-  });
+  }, ctx.contactEmail);
 
   try {
     await db.update(enrollments)
@@ -373,7 +377,7 @@ export async function sendPaymentReceived(
     kind: "customer_payment_received",
     enrollmentId,
     paymentId: ctx.payment?.id ?? null,
-  });
+  }, ctx.contactEmail);
 }
 
 // Fire-and-forget wrapper used from request handlers/webhooks so email work

@@ -17,6 +17,8 @@ export interface SendEmailInput {
   kind?: EmailKind | null;
   enrollmentId?: number | null;
   paymentId?: number | null;
+  /** Where a reply goes; our sender address is a no-reply mailbox. */
+  replyTo?: string | null;
 }
 
 export type EmailKind =
@@ -186,6 +188,7 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
       to: input.to,
       subject: input.subject,
       text: input.body,
+      ...(input.replyTo?.trim() ? { replyTo: input.replyTo.trim() } : {}),
       ...(input.headers && Object.keys(input.headers).length > 0 ? { headers: input.headers } : {}),
     };
     if (input.html) sendPayload.html = input.html;

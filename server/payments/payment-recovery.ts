@@ -1,7 +1,7 @@
 import { storage } from "../storage";
 import type { Payment } from "@shared/schema";
 import { retrieveStripeCheckoutSession } from "./stripe-adapter";
-import { activateCart, activateEnrollment } from "./activation-service";
+import { completeProviderPayment } from "./complete-payment";
 
 // Recovery for card payments the provider took but Drivorata never confirmed
 // (before 2026-10-18 the Stripe webhook processed nothing). The provider is
@@ -133,19 +133,9 @@ export async function recoverPayment(o: RecoverOptions): Promise<RecoverResult> 
 
   const bookSeat = payment.cartId ? (o.bookSeat ?? (await cartClassesAllUpcoming(payment.cartId))) : false;
 
-  // The expiry job may have expired an express enrollment while it waited.
-  if (payment.enrollmentId) {
-    const enr = await storage.getEnrollmentById(payment.enrollmentId, payment.tenantId);
-    if (!enr) throw new RecoveryError("Enrollment for this payment no longer exists");
-    if (enr.status === "expired") {
-      await storage.updateEnrollment(enr.id, enr.tenantId, { status: "pending_payment" } as any);
-    }
-  }
-
+  // Record the evidence first; completion itself is shared with the webhook
+  // and the reconciliation job (and revives an expired enrollment).
   await storage.updatePayment(payment.id, {
-    status: "COMPLETED",
-    completedAt: check.paidAt ? new Date(check.paidAt) : new Date(),
-    providerPaymentId: check.paymentIntentId,
     metadataJson: {
       ...((payment.metadataJson as Record<string, unknown>) || {}),
       providerCheck: check,
@@ -160,22 +150,16 @@ export async function recoverPayment(o: RecoverOptions): Promise<RecoverResult> 
     },
   } as any);
 
-  const activationOpts = {
-    notifyCustomer: !!o.notifyCustomer,
-    notifyAdmin: !!o.notifyAdmin,
-    bookOfferings: bookSeat,
-  };
-  let enrollmentIds: number[] = [];
-  let errors: string[] | undefined;
-  if (payment.cartId) {
-    const r = await activateCart(payment.id, activationOpts);
-    enrollmentIds = r.enrollmentIds;
-    errors = r.errors;
-  } else if (payment.enrollmentId) {
-    const r = await activateEnrollment(payment.enrollmentId, payment.id, activationOpts);
-    enrollmentIds = r.ok ? [r.enrollmentId] : [];
-    if (!r.ok) errors = [r.error || "Activation failed"];
+  const completion = await completeProviderPayment(
+    payment.id,
+    { providerPaymentId: check.paymentIntentId, completedAt: check.paidAt ? new Date(check.paidAt) : new Date() },
+    { notifyCustomer: !!o.notifyCustomer, notifyAdmin: !!o.notifyAdmin, bookOfferings: bookSeat },
+  );
+  if (completion.alreadyCompleted) {
+    return { ok: true, alreadyCompleted: true, enrollmentIds: [], bookedSeat: false };
   }
+  const enrollmentIds = completion.enrollmentIds;
+  const errors = completion.errors;
 
   try {
     await storage.createAuditEvent({

@@ -18,4 +18,5 @@ Express 5 + Vite/React + Drizzle/Postgres monorepo. Hosted on Railway (Dockerfil
 ## Conventions
 - Never read `x-forwarded-for` directly; use `getClientIp(req)`. Build visitor-facing absolute URLs with `getRequestBaseUrl(req)`; platform links with `platformBaseUrl()`.
 - Uploads are addressed as `/objects/uploads/<uuid>`; that string is what gets stored.
-- Docs: `docs/ARCHITECTURE.md` (features/decisions), `docs/DEPLOYMENT.md` (Railway + Cloudflare setup), `docs/MIGRATION-RUNBOOK.md` (Replit cutover).
+- Docs: `docs/ARCHITECTURE.md` (features/decisions), `docs/DEPLOYMENT.md` (Railway + Cloudflare setup), `docs/MIGRATION-RUNBOOK.md` (Replit cutover), `docs/ENROLLMENT-TROUBLESHOOTING.md` (payment/email tracing).
+- A provider payment becomes COMPLETED only through `server/payments/complete-payment.ts` (webhook, reconcile job, admin recovery).

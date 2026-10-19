@@ -1,6 +1,7 @@
 import { pool } from "../db";
 import { storage } from "../storage";
 import { notifyAbandonedCheckouts } from "../admin-enrollment-notifications";
+import { reconcilePendingCardPayments } from "../payments/reconcile";
 import { runStaleCreditRemindersAllTenants } from "../stale-credit-reminders";
 import { runCartRemindersAllTenants } from "../cart-reminders";
 
@@ -101,6 +102,22 @@ export function startBackgroundJobs(): void {
 
   // Hourly enrollment/cart expiry sweep.
   schedule("expiry-cleanup", 60 * 60 * 1000, runExpiryCleanupAllTenants);
+
+  // Card payment reconciliation: asks Stripe about recent checkouts still not
+  // confirmed, in case the webhook was missed. PAYMENT_RECONCILE_INTERVAL_MINUTES
+  // (default 15; <=0 disables).
+  const reconcileMinutes = cadenceMinutes("PAYMENT_RECONCILE_INTERVAL_MINUTES", 15);
+  if (reconcileMinutes > 0) {
+    console.log(`[Reconcile] Scheduler enabled, interval=${reconcileMinutes} minute(s)`);
+    schedule("payment-reconcile", reconcileMinutes * 60 * 1000, async () => {
+      const r = await reconcilePendingCardPayments();
+      if (r.completed > 0 || r.errors > 0) {
+        console.log(`[Reconcile] checked=${r.checked} completed=${r.completed} errors=${r.errors}`);
+      }
+    });
+  } else {
+    console.log("[Reconcile] Scheduler disabled (PAYMENT_RECONCILE_INTERVAL_MINUTES <= 0)");
+  }
 
   // Stale-credit reminders. STALE_CREDIT_REMINDER_INTERVAL_MINUTES (default 60; <=0 disables).
   const staleCreditMinutes = cadenceMinutes("STALE_CREDIT_REMINDER_INTERVAL_MINUTES", 60);

@@ -15,6 +15,17 @@ function cartLockKey(cartId: string): number {
   return h;
 }
 
+/**
+ * Side effects of activation. Everything defaults to on; payment recovery
+ * turns them off so a customer who paid months ago isn't emailed out of the
+ * blue and no seat is booked on a class that has already run.
+ */
+export interface ActivationOptions {
+  notifyCustomer?: boolean;
+  notifyAdmin?: boolean;
+  bookOfferings?: boolean;
+}
+
 export interface ActivationResult {
   ok: boolean;
   alreadyActive?: boolean;
@@ -24,7 +35,8 @@ export interface ActivationResult {
 
 export async function activateEnrollment(
   enrollmentId: number,
-  paymentId: number
+  paymentId: number,
+  opts: ActivationOptions = {},
 ): Promise<ActivationResult> {
   const payment = await storage.getPayment(paymentId);
   if (!payment || payment.status !== "COMPLETED") {
@@ -40,7 +52,7 @@ export async function activateEnrollment(
     return { ok: false, enrollmentId, error: "Enrollment not found for this tenant" };
   }
 
-  const result = await activateWithEnrollment(enrollment, payment, payment.amountCents);
+  const result = await activateWithEnrollment(enrollment, payment, payment.amountCents, opts);
   if (result.ok) {
     try {
       await storage.markCartRemindersRecovered(payment.tenantId, {
@@ -61,7 +73,7 @@ export interface CartActivationResult {
   errors?: string[];
 }
 
-export async function activateCart(paymentId: number): Promise<CartActivationResult> {
+export async function activateCart(paymentId: number, opts: ActivationOptions = {}): Promise<CartActivationResult> {
   const payment = await storage.getPayment(paymentId);
   if (!payment) {
     return { ok: false, cartId: "", enrollmentIds: [], errors: ["Payment not found"] };
@@ -100,11 +112,11 @@ export async function activateCart(paymentId: number): Promise<CartActivationRes
     if (cartEnrollments.length === 0) {
       // Capture-time atomic step: create enrollments AND book offerings inside
       // a single DB transaction. If anything fails, nothing is persisted.
-      const created = await storage.createCartEnrollmentsAndBookAtomic(cartId, {
-        id: payment.id,
-        tenantId: payment.tenantId,
-        amountCents: payment.amountCents,
-      });
+      const created = await storage.createCartEnrollmentsAndBookAtomic(
+        cartId,
+        { id: payment.id, tenantId: payment.tenantId, amountCents: payment.amountCents },
+        { bookOfferings: opts.bookOfferings ?? true },
+      );
       if (!created.ok) {
         errors.push(`Cart capture failed: ${created.error}`);
         return { ok: false, cartId, enrollmentIds: [], errors };
@@ -114,7 +126,7 @@ export async function activateCart(paymentId: number): Promise<CartActivationRes
       // so fire the per-enrollment admin notification at this point. The
       // notification helper is idempotent via a DB column claim, so re-running
       // activateCart on webhook retries won't double-send.
-      for (const enr of cartEnrollments) {
+      for (const enr of opts.notifyAdmin === false ? [] : cartEnrollments) {
         fireAndForget(
           () => sendAdminEnrollmentNotification(enr.id, payment.tenantId),
           `admin_enrollment_notification cart=${cartId} enrollment#${enr.id}`,
@@ -137,7 +149,7 @@ export async function activateCart(paymentId: number): Promise<CartActivationRes
       ids.push(enrollment.id);
       continue;
     }
-    const result = await activateWithEnrollment(enrollment, payment, enrollment.amountPaid || 0);
+    const result = await activateWithEnrollment(enrollment, payment, enrollment.amountPaid || 0, opts);
     if (result.ok) {
       ids.push(enrollment.id);
     } else {
@@ -217,7 +229,8 @@ export async function confirmEnrollmentManually(
 async function activateWithEnrollment(
   enrollment: Enrollment,
   payment: Payment,
-  amountPaidCents: number
+  amountPaidCents: number,
+  opts: ActivationOptions = {},
 ): Promise<ActivationResult> {
   if (enrollment.status === "confirmed" || enrollment.status === "active") {
     return { ok: true, alreadyActive: true, enrollmentId: enrollment.id };
@@ -249,10 +262,12 @@ async function activateWithEnrollment(
     amountPaid: amountPaidCents,
   } as any);
 
-  fireAndForget(
-    () => sendPaymentReceived(enrollment.id, enrollment.tenantId),
-    `payment_received enrollment#${enrollment.id}`,
-  );
+  if (opts.notifyCustomer !== false) {
+    fireAndForget(
+      () => sendPaymentReceived(enrollment.id, enrollment.tenantId),
+      `payment_received enrollment#${enrollment.id}`,
+    );
+  }
 
   try {
     await storage.createAuditEvent({

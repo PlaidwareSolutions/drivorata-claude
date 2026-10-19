@@ -44,6 +44,7 @@ import { Link, useSearch } from "wouter";
 import type { CreditLedgerEntry } from "@shared/schema";
 import { useLocationFilter } from "@/lib/location-filter-context";
 import { LocationFilterIndicator } from "@/components/admin/location-filter-indicator";
+import { UnconfirmedCardPaymentsPanel, useUnconfirmedCardPayments } from "@/components/admin/unconfirmed-card-payments";
 
 type Enrollment = {
   id: number;
@@ -409,8 +410,10 @@ export default function EnrollmentsPage() {
   const [focusedId, setFocusedId] = useState<number | null>(null);
   const search = useSearch();
 
-  type AttentionTab = "confirmed" | "pending_cash" | "abandoned";
+  type AttentionTab = "confirmed" | "pending_cash" | "unconfirmed_card" | "abandoned";
   const [activeTab, setActiveTab] = useState<AttentionTab>("confirmed");
+
+  const { data: unconfirmedCard = [] } = useUnconfirmedCardPayments(tenantId);
 
   const { data: enrollments = [], isLoading } = useQuery<Enrollment[]>({
     queryKey: ["/api/tenants", tenantId, "enrollments"],
@@ -893,6 +896,11 @@ export default function EnrollmentsPage() {
           <TabsTrigger value="pending_cash" data-testid="tab-pending-cash">
             Pending cash ({pendingCash.length})
           </TabsTrigger>
+          {unconfirmedCard.length > 0 && (
+            <TabsTrigger value="unconfirmed_card" data-testid="tab-unconfirmed-card">
+              Unconfirmed card payments ({unconfirmedCard.filter((p) => p.metadataJson?.providerCheck?.paid).length || unconfirmedCard.length})
+            </TabsTrigger>
+          )}
           <TabsTrigger value="abandoned" data-testid="tab-abandoned">
             Expired & abandoned ({expiredEnrollments.length + abandonedCarts.length})
           </TabsTrigger>
@@ -1157,6 +1165,10 @@ export default function EnrollmentsPage() {
           )}
             </>);
           })()}
+        </TabsContent>
+
+        <TabsContent value="unconfirmed_card" className="mt-4">
+          {tenantId && <UnconfirmedCardPaymentsPanel tenantId={tenantId} />}
         </TabsContent>
 
         <TabsContent value="abandoned" className="mt-4" data-testid="panel-abandoned">

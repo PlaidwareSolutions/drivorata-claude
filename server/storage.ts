@@ -145,7 +145,7 @@ import {
   type InsertFaq,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, or, ilike, inArray, sql, desc, lt, count, type SQL } from "drizzle-orm";
+import { eq, and, or, ilike, inArray, isNotNull, sql, desc, lt, count, type SQL } from "drizzle-orm";
 import {
   CartCheckoutError,
   CartCheckoutErrorCode,
@@ -557,6 +557,7 @@ export interface IStorage {
   setCartLocation(cartId: string, locationId: number | null): Promise<void>;
   listPendingCashPayments(tenantId: number): Promise<Array<Payment & { enrollment: Enrollment | null; cartCustomer: any; cartItems: Array<{ package: Package | null; offering: ScheduleOffering | null; quantity: number }> }>>;
   countPendingCashPayments(tenantId: number): Promise<number>;
+  listUnconfirmedCardPayments(tenantId: number): Promise<Array<Payment & { enrollment: Enrollment | null; cartCustomer: any; cartItems: Array<{ package: Package | null; offering: ScheduleOffering | null; quantity: number }> }>>;
   cancelCashPayment(paymentId: number, tenantId: number): Promise<{ ok: boolean; cartId: string | null; enrollmentIds: number[] }>;
   listAbandonedCarts(tenantId: number): Promise<Array<Cart & { items: Array<CartItem & { package: Package; offering?: ScheduleOffering | null }> }>>;
   expireAbandonedCarts(tenantId: number, olderThanHours: number): Promise<Array<{ cartId: string; tenantId: number }>>;
@@ -576,7 +577,8 @@ export interface IStorage {
   getEnrollmentsByCart(cartId: string): Promise<Enrollment[]>;
   createCartEnrollmentsAndBookAtomic(
     cartId: string,
-    payment: { id: number; tenantId: number; amountCents: number }
+    payment: { id: number; tenantId: number; amountCents: number },
+    opts?: { bookOfferings?: boolean },
   ): Promise<{ ok: true; enrollments: Enrollment[]; bookings: { enrollmentId: number; booked: number; waitlisted: boolean }[] } | { ok: false; error: string }>;
   bookOfferingSessionsAtomic(enrollmentId: number, offeringId: number, tenantId: number, userId: string | null): Promise<{ booked: number; waitlisted: boolean }>;
   bookCartOfferingsAtomic(items: { enrollmentId: number; offeringId: number; tenantId: number; userId: string | null }[]): Promise<{ ok: boolean; results: { enrollmentId: number; booked: number; waitlisted: boolean }[]; error?: string }>;
@@ -1577,6 +1579,25 @@ export class DatabaseStorage implements IStorage {
         eq(payments.status, "PENDING"),
       ))
       .orderBy(desc(payments.createdAt));
+    return this.withPaymentContext(rows);
+  }
+
+  // Card checkouts that never reached COMPLETED but did get as far as a
+  // provider session — the only ones that could have been paid. Used to
+  // recover payments the provider took but the webhook never confirmed.
+  async listUnconfirmedCardPayments(tenantId: number): Promise<Array<Payment & { enrollment: Enrollment | null; cartCustomer: any; cartItems: Array<{ package: Package | null; offering: ScheduleOffering | null; quantity: number }> }>> {
+    const rows = await db.select().from(payments)
+      .where(and(
+        eq(payments.tenantId, tenantId),
+        eq(payments.provider, "STRIPE"),
+        inArray(payments.status, ["PENDING", "EXPIRED", "FAILED"]),
+        isNotNull(payments.providerOrderId),
+      ))
+      .orderBy(desc(payments.createdAt));
+    return this.withPaymentContext(rows);
+  }
+
+  private async withPaymentContext(rows: Payment[]): Promise<Array<Payment & { enrollment: Enrollment | null; cartCustomer: any; cartItems: Array<{ package: Package | null; offering: ScheduleOffering | null; quantity: number }> }>> {
     if (rows.length === 0) return [];
     const enrollmentIds = Array.from(new Set(rows.map(r => r.enrollmentId).filter((x): x is number => x != null)));
     const cartIds = Array.from(new Set(rows.map(r => r.cartId).filter((x): x is string => x != null)));
@@ -1854,7 +1875,8 @@ export class DatabaseStorage implements IStorage {
 
   async createCartEnrollmentsAndBookAtomic(
     cartId: string,
-    payment: { id: number; tenantId: number; amountCents: number }
+    payment: { id: number; tenantId: number; amountCents: number },
+    opts: { bookOfferings?: boolean } = {},
   ): Promise<{ ok: true; enrollments: Enrollment[]; bookings: { enrollmentId: number; booked: number; waitlisted: boolean }[] } | { ok: false; error: string }> {
     const cart = await this.getCart(cartId);
     if (!cart) return { ok: false, error: "Cart not found" };
@@ -1865,6 +1887,7 @@ export class DatabaseStorage implements IStorage {
     if (!customer.firstName || !customer.lastName || !customer.email) {
       return { ok: false, error: "Cart is missing customer details" };
     }
+    const bookOfferings = opts.bookOfferings ?? true;
 
     try {
       const result = await db.transaction(async (tx) => {
@@ -1880,7 +1903,10 @@ export class DatabaseStorage implements IStorage {
               eq(scheduleOfferings.tenantId, cart.tenantId),
             ));
             if (!off) throw new Error(`Offering #${item.offeringId} not found`);
-            if (!["PUBLISHED", "FULL"].includes(off.status as string)) {
+            // Recovering a payment for a class that has already run records
+            // the class on the enrollment without booking seats, so the
+            // offering may legitimately be COMPLETED by then.
+            if (bookOfferings && !["PUBLISHED", "FULL"].includes(off.status as string)) {
               throw new Error(`Offering #${item.offeringId} is not bookable (status: ${off.status})`);
             }
             if (off.packageId !== item.packageId) throw new Error(`Offering #${item.offeringId} no longer fulfills package #${item.packageId}`);
@@ -1925,7 +1951,7 @@ export class DatabaseStorage implements IStorage {
           } as any).returning();
           createdEnrollments.push(enr);
 
-          if (item.offeringId) {
+          if (item.offeringId && bookOfferings) {
             const r = await this.bookOfferingInTx(tx, enr.id, item.offeringId, cart.tenantId, null);
             bookingResults.push({ enrollmentId: enr.id, ...r });
           }

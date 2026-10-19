@@ -64,6 +64,57 @@ export function __resetStripeCheckoutSessionForTests(): void {
   stripeCheckoutSessionImpl = realCreateStripeCheckoutSession;
 }
 
+export interface StripeSessionStatus {
+  sessionId: string;
+  /** Checkout Session status: open | complete | expired. */
+  status: string | null;
+  /** paid | unpaid | no_payment_required */
+  paymentStatus: string;
+  paymentIntentId: string | null;
+  chargeId: string | null;
+  amountTotalCents: number | null;
+  customerEmail: string | null;
+  /** When the charge was made (falls back to session creation time). */
+  paidAt: Date | null;
+}
+
+async function realRetrieveStripeCheckoutSession(secretKey: string, sessionId: string): Promise<StripeSessionStatus> {
+  const stripe = new Stripe(secretKey, { apiVersion: "2025-01-27.acacia" as any });
+  const session = await stripe.checkout.sessions.retrieve(sessionId, {
+    expand: ["payment_intent.latest_charge"],
+  });
+  const pi = session.payment_intent && typeof session.payment_intent === "object" ? session.payment_intent : null;
+  const charge = pi?.latest_charge && typeof pi.latest_charge === "object" ? pi.latest_charge : null;
+  return {
+    sessionId: session.id,
+    status: session.status ?? null,
+    paymentStatus: session.payment_status,
+    paymentIntentId: pi?.id ?? (typeof session.payment_intent === "string" ? session.payment_intent : null),
+    chargeId: charge?.id ?? (typeof pi?.latest_charge === "string" ? pi.latest_charge : null),
+    amountTotalCents: session.amount_total ?? null,
+    customerEmail: session.customer_details?.email ?? session.customer_email ?? null,
+    paidAt: charge?.created ? new Date(charge.created * 1000) : session.payment_status === "paid" ? new Date(session.created * 1000) : null,
+  };
+}
+
+let retrieveStripeCheckoutSessionImpl: (secretKey: string, sessionId: string) => Promise<StripeSessionStatus> =
+  realRetrieveStripeCheckoutSession;
+
+/** Ask Stripe what actually happened to a Checkout Session (paid or not). */
+export async function retrieveStripeCheckoutSession(secretKey: string, sessionId: string): Promise<StripeSessionStatus> {
+  return retrieveStripeCheckoutSessionImpl(secretKey, sessionId);
+}
+
+export function __setRetrieveStripeCheckoutSessionForTests(
+  fn: (secretKey: string, sessionId: string) => Promise<StripeSessionStatus>,
+): void {
+  retrieveStripeCheckoutSessionImpl = fn;
+}
+
+export function __resetRetrieveStripeCheckoutSessionForTests(): void {
+  retrieveStripeCheckoutSessionImpl = realRetrieveStripeCheckoutSession;
+}
+
 export async function verifyStripeWebhook(
   payload: string | Buffer,
   signature: string,

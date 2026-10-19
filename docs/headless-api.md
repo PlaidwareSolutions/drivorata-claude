@@ -620,6 +620,70 @@ configured and can look misleading to the buyer.
 
 ---
 
+### 3.10 Class schedule
+
+```
+GET /api/public/tenant/:slug/class-schedule?locationId=&packageId=&audience=TEENS|ADULTS&from=&to=
+```
+
+One row per upcoming class (status `PUBLISHED` or `FULL`, starting after
+`from`, default now), sorted by start. Ready to render as a schedule table;
+`enroll` holds the ids the cart flow needs (§3.5 + §3.8). `audience=TEENS`
+also returns `BOTH` packages.
+
+```jsonc
+[{
+  "offeringId": 812, "packageId": 41,
+  "packageName": "Teen Driver Ed", "audience": "TEENS",   // TEENS | ADULTS | BOTH
+  "className": "Cypress Evening Class",                    // internal-ish name; de-emphasize
+  "details": "Bring your learner permit.",                 // the class description from the admin, or null
+  "location": { "id": 26, "name": "Cypress,TX", "city": "Cypress", "phone": "281-859-3100" },
+  "startsAt": "2030-11-04T23:00:00.000Z", "endsAt": "2030-11-08T02:00:00.000Z",
+  "timezone": "America/Chicago",
+  "dateRange": "Nov 4 – Nov 7, 2030",
+  "scheduleSummary": "Mon–Thu, 5:00–8:00 PM",              // "" when the class has no sessions yet
+  "sessions": [{ "startAt": "…", "endAt": "…" }],
+  "priceCents": 42500,                                     // location price; card fee not included (§3.9)
+  "remainingSeats": 7, "availability": "OPEN",             // OPEN | FEW_LEFT (≤3) | FULL
+  "enroll": { "packageId": 41, "offeringId": 812, "locationId": 26 }
+}]
+```
+
+### 3.11 Checkout status (thank-you page)
+
+```
+GET /api/public/tenant/:slug/checkout/:reference/status
+```
+
+`reference` comes from the checkout start response and the success URL
+(`&ref=`); case-insensitive. While a card payment is still pending the server
+asks Stripe directly (at most every 15 s), so polling every few seconds shows
+"paid" as soon as the money lands, even if the webhook is late.
+
+```jsonc
+{
+  "reference": "AA-7K3F9Q",
+  "state": "paid",          // paid | pending | cash_due | not_completed | refunded
+  "provider": "STRIPE", "amountCents": 43775, "currency": "USD",
+  "paidAt": "2030-10-01T15:30:00.000Z",
+  "items": [{ "name": "Teen Driver Ed", "className": "Cypress Evening Class",
+              "startsAt": "2030-11-04T23:00:00.000Z", "locationName": "Cypress,TX", "locationPhone": "281-859-3100" }],
+  "enrollments": [{ "id": 9011, "status": "confirmed" }]
+}
+```
+
+Only say "you're enrolled" when `state` is `paid`. `pending` → "Payment
+processing…"; `cash_due` → "Reserved — pay at the office"; `not_completed` →
+"Payment didn't go through — try again or call {locationPhone}". 404 = unknown
+reference.
+
+### 3.12 Campaign attribution
+
+All checkout start bodies (§3.7, §3.8, online courses) accept optional
+`utm_source`, `utm_medium`, `utm_campaign` and `gclid` strings. Capture them
+from the landing URL and send them with checkout; the school sees them on each
+payment (admin Payments page and CSV).
+
 ## 4. Error codes
 
 All cart and checkout error responses return HTTP 400 with a stable JSON

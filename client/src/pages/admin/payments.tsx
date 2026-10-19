@@ -42,7 +42,12 @@ interface PaymentRow {
   completedAt: string | null;
   createdAt: string;
   cartId: string | null;
-  metadataJson: { purchase?: PurchaseItem[]; packageName?: string; onlineCourseName?: string } | null;
+  metadataJson: {
+    purchase?: PurchaseItem[];
+    packageName?: string;
+    onlineCourseName?: string;
+    attribution?: { utmSource?: string; utmMedium?: string; utmCampaign?: string; gclid?: string };
+  } | null;
   enrollment: (Person & { id: number; packageSnapshotJson?: { name?: string } | null }) | null;
   cartCustomer: Person | null;
   cartItems: Array<{ package: { name: string } | null; offering: { name: string; startsAt: string } | null }>;
@@ -102,6 +107,13 @@ function itemsOf(p: PaymentRow): Array<{ label: string; date: string }> {
   return name ? [{ label: name, date: "" }] : [];
 }
 
+/** "google / cpc / fall-teen" — where the buyer came from, if the storefront captured it. */
+function sourceOf(p: PaymentRow): string {
+  const a = p.metadataJson?.attribution;
+  if (!a) return "";
+  return [a.utmSource, a.utmMedium, a.utmCampaign].filter(Boolean).join(" / ") || (a.gclid ? "Google Ads" : "");
+}
+
 function csvCell(v: string | number) {
   const s = String(v ?? "");
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -111,6 +123,7 @@ function downloadCsv(rows: PaymentRow[]) {
   const header = [
     "Date", "Reference", "Status", "Method", "Amount", "Service fee", "Customer", "Email", "Phone",
     "Purchased", "Class date", "Transaction ID", "Paid at", "Started at", "Enrollment ID",
+    "Source", "Medium", "Campaign", "Google click ID",
   ];
   const lines = rows.map((p) => {
     const c = customerOf(p);
@@ -131,6 +144,10 @@ function downloadCsv(rows: PaymentRow[]) {
       dateTime(p.completedAt),
       dateTime(p.createdAt),
       p.enrollment?.id ?? "",
+      p.metadataJson?.attribution?.utmSource ?? "",
+      p.metadataJson?.attribution?.utmMedium ?? "",
+      p.metadataJson?.attribution?.utmCampaign ?? "",
+      p.metadataJson?.attribution?.gclid ?? "",
     ].map(csvCell).join(",");
   });
   const blob = new Blob([[header.join(","), ...lines].join("\n")], { type: "text/csv;charset=utf-8" });
@@ -269,6 +286,7 @@ export default function PaymentsPage() {
                     <TableCell className="text-sm min-w-[180px]">
                       <div className="font-medium">{`${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || "—"}</div>
                       <div className="text-muted-foreground break-all">{[c.email, c.phone].filter(Boolean).join(" · ")}</div>
+                      {sourceOf(p) && <div className="text-xs text-muted-foreground">via {sourceOf(p)}</div>}
                     </TableCell>
                     <TableCell className="text-sm min-w-[220px]">
                       {itemsOf(p).map((it, i) => (

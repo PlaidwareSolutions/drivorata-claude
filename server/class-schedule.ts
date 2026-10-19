@@ -48,6 +48,7 @@ function parts(d: Date, timezone: string) {
 function joinDays(days: string[]): string {
   const idx = days.map((d) => DAY_ORDER.indexOf(d)).filter((i) => i >= 0).sort((a, b) => a - b);
   if (idx.length === 0) return "";
+  if (idx.length === 7) return "Daily";
   const consecutive = idx.every((v, i) => i === 0 || v === idx[i - 1] + 1);
   if (idx.length >= 3 && consecutive) return `${DAY_ORDER[idx[0]]}–${DAY_ORDER[idx[idx.length - 1]]}`;
   const names = idx.map((i) => DAY_ORDER[i]);

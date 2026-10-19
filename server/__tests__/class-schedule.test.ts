@@ -42,6 +42,8 @@ test("summarizeSchedule: weekend pair, mixed meridiem, and varying times", () =>
     "Mon & Wed, times vary",
   );
   assert.equal(summarizeSchedule([], TZ), "");
+  const everyDay = [4, 5, 6, 7, 8, 9, 10].map((d) => ({ startAt: at(d, 19), endAt: at(d, 21) }));
+  assert.equal(summarizeSchedule(everyDay, TZ), "Daily, 1:00–3:00 PM");
 });
 
 test("formatDateRange: multi-day and single-day", () => {

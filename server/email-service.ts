@@ -13,7 +13,19 @@ export interface SendEmailInput {
   bookingId?: number | null;
   actorUserId?: string | null;
   headers?: Record<string, string>;
+  /** e.g. "customer_payment_received", "owner_paid" — see EmailKind. */
+  kind?: EmailKind | null;
+  enrollmentId?: number | null;
+  paymentId?: number | null;
 }
+
+export type EmailKind =
+  | "customer_enrollment_received"
+  | "customer_payment_received"
+  | "owner_paid"
+  | "owner_cash_due"
+  | "owner_new"
+  | "owner_not_paid";
 
 export interface SendEmailResult {
   status: "sent" | "skipped_no_provider" | "skipped_unsubscribed" | "failed";
@@ -67,6 +79,50 @@ async function tryLoadResend(): Promise<any | null> {
   }
 }
 
+// Resend errors that won't go away by trying again (bad address, bad request,
+// auth). Anything else — rate limit, 5xx, network — gets one more attempt.
+const PERMANENT_RESEND_ERRORS = new Set([
+  "validation_error",
+  "missing_required_field",
+  "invalid_parameter",
+  "invalid_from_address",
+  "invalid_to_address",
+  "invalid_api_key",
+  "restricted_api_key",
+  "missing_api_key",
+  "not_found",
+  "method_not_allowed",
+]);
+
+let retryDelayMs = 1500;
+export function __setEmailRetryDelayForTests(ms: number): void {
+  retryDelayMs = ms;
+}
+
+async function sendWithOneRetry(resend: any, payload: any): Promise<any> {
+  for (let attempt = 1; ; attempt++) {
+    let error: { name?: string; message?: string } | null = null;
+    try {
+      const resp: any = await resend.emails.send(payload);
+      if (!resp?.error) return resp;
+      error = resp.error;
+    } catch (e: any) {
+      error = { name: "network_error", message: e?.message || String(e) };
+    }
+    const permanent = PERMANENT_RESEND_ERRORS.has(String(error?.name || ""));
+    if (permanent || attempt >= 2) {
+      throw new Error(error?.message || error?.name || "Resend error");
+    }
+    await new Promise((r) => setTimeout(r, retryDelayMs));
+  }
+}
+
+/** Test seam: route sends to a fake Resend client (null restores the real one). */
+export function __setResendClientForTests(client: any | null): void {
+  resendLoaded = client != null;
+  resendClient = client;
+}
+
 export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
   const insertVals: InsertSessionChangeEmail = {
     tenantId: input.tenantId,
@@ -77,6 +133,9 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
     subject: input.subject,
     body: input.body,
     status: "queued",
+    kind: input.kind ?? null,
+    enrollmentId: input.enrollmentId ?? null,
+    paymentId: input.paymentId ?? null,
   };
 
   const [row] = await db.insert(sessionChangeEmails).values(insertVals).returning();
@@ -130,10 +189,7 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
       ...(input.headers && Object.keys(input.headers).length > 0 ? { headers: input.headers } : {}),
     };
     if (input.html) sendPayload.html = input.html;
-    const resp: any = await resend.emails.send(sendPayload);
-    if (resp?.error) {
-      throw new Error(resp.error.message || resp.error.name || "Resend error");
-    }
+    const resp: any = await sendWithOneRetry(resend, sendPayload);
     const messageId = resp?.data?.id || resp?.id || null;
     await db.update(sessionChangeEmails)
       .set({ status: "sent", sentAt: new Date(), providerMessageId: messageId })

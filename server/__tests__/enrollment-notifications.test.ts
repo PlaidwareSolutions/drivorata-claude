@@ -332,3 +332,37 @@ test("a school's custom template still gets the enrollment details", async () =>
     await db.delete(tenantEmailTemplates).where(eq(tenantEmailTemplates.tenantId, tenantId));
   }
 });
+
+test("admin details show the class, reference and email history; resend sends again", async () => {
+  const { paymentId, reference, cartId, student } = await startClassCartCheckout("STRIPE");
+  await pay(paymentId);
+  await activateCart(paymentId);
+  await settle();
+  const [enr] = await db.select().from(enrollments).where(eq(enrollments.cartId, cartId));
+
+  const detailsUrl = `${baseUrl}/api/tenants/${tenantId}/enrollments/${enr.id}/details`;
+  const d = await (await fetch(detailsUrl, { headers: adminHeaders() })).json();
+  assert.equal(d.reference, reference);
+  assert.equal(d.offering.name, "Cypress Evening Class");
+  assert.deepEqual(d.classDates, ["Mon, Nov 4, 2030, 5:00 PM – 8:00 PM", "Tue, Nov 5, 2030, 5:00 PM – 8:00 PM"]);
+  assert.ok(d.payments.some((p: any) => p.id === paymentId && p.status === "COMPLETED"), "cart payment included");
+  const kinds = d.emails.map((e: any) => e.kind).sort();
+  assert.deepEqual(kinds, ["customer_payment_received", "owner_paid"]);
+
+  for (const target of ["customer", "owner"]) {
+    const r = await fetch(`${baseUrl}/api/tenants/${tenantId}/enrollments/${enr.id}/resend-email`, {
+      method: "POST", headers: adminHeaders(), body: JSON.stringify({ target }),
+    });
+    assert.equal(r.status, 200, await r.clone().text());
+  }
+  const after = await (await fetch(detailsUrl, { headers: adminHeaders() })).json();
+  const count = (k: string) => after.emails.filter((e: any) => e.kind === k).length;
+  assert.equal(count("customer_payment_received"), 2);
+  assert.equal(count("owner_paid"), 2);
+  assert.equal((await emailsTo(student.email)).length, 2);
+
+  const bad = await fetch(`${baseUrl}/api/tenants/${tenantId}/enrollments/${enr.id}/resend-email`, {
+    method: "POST", headers: adminHeaders(), body: JSON.stringify({ target: "everyone" }),
+  });
+  assert.equal(bad.status, 400);
+});

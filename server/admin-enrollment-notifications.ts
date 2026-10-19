@@ -2,7 +2,7 @@ import { db } from "./db";
 import { enrollments, payments, tenantMembers, users, type Payment, type Tenant } from "@shared/schema";
 import { and, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { storage } from "./storage";
-import { sendEmail } from "./email-service";
+import { sendEmail, type EmailKind } from "./email-service";
 import { platformBaseUrl } from "./lib/request";
 import {
   classDateLines,
@@ -137,7 +137,12 @@ function renderHtmlBody(banner: string, bannerColor: string, schoolName: string,
 }
 
 /** Sends to every recipient; true when at least one send went through. */
-async function deliver(tenant: Tenant, msg: { subject: string; body: string; html: string }, label: string): Promise<boolean> {
+async function deliver(
+  tenant: Tenant,
+  msg: { subject: string; body: string; html: string },
+  trace: { kind: EmailKind; enrollmentId?: number | null; paymentId?: number | null },
+  label: string,
+): Promise<boolean> {
   const recipients = await getAdminRecipients(tenant);
   if (recipients.length === 0) {
     console.warn(`[OwnerNotification] ${label}: tenant ${tenant.id} has no admin or notification recipients`);
@@ -146,7 +151,7 @@ async function deliver(tenant: Tenant, msg: { subject: string; body: string; htm
   let delivered = false;
   for (const r of recipients) {
     try {
-      const res = await sendEmail({ tenantId: tenant.id, to: r.email, recipientUserId: r.userId, ...msg });
+      const res = await sendEmail({ tenantId: tenant.id, to: r.email, recipientUserId: r.userId, ...msg, ...trace });
       if (res.status === "sent" || res.status === "skipped_no_provider") delivered = true;
       else console.error(`[OwnerNotification] ${label}: send to ${r.email} ${res.status}${res.errorMsg ? `: ${res.errorMsg}` : ""}`);
     } catch (err) {
@@ -291,7 +296,13 @@ export async function sendAdminEnrollmentNotification(
     if (!claimed) return;
   }
 
-  const delivered = await deliver(ctx.tenant, buildEnrollmentMessage(ctx, state), `${state} enrollment#${enrollmentId}`);
+  const kind: EmailKind = state === "PAID" ? "owner_paid" : state === "CASH DUE" ? "owner_cash_due" : "owner_new";
+  const delivered = await deliver(
+    ctx.tenant,
+    buildEnrollmentMessage(ctx, state),
+    { kind, enrollmentId, paymentId: ctx.payment?.id ?? null },
+    `${state} enrollment#${enrollmentId}`,
+  );
   if (!delivered && state === "PAID") {
     await db.update(enrollments)
       .set({ adminNotificationEmailSentAt: null })
@@ -396,6 +407,7 @@ export async function sendCheckoutOwnerNotification(paymentId: number, kind: Che
       body: renderTextBody(banner.text, tenant.name, sections, link),
       html: renderHtmlBody(banner.text, banner.color, tenant.name, sections, link),
     },
+    { kind: kind === "not_paid" ? "owner_not_paid" : "owner_cash_due", enrollmentId: payment.enrollmentId, paymentId: payment.id },
     `${kind} payment#${payment.id}`,
   );
   if (!delivered) await releasePaymentNotification(payment.id, key);

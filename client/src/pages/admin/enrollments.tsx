@@ -45,6 +45,7 @@ import type { CreditLedgerEntry } from "@shared/schema";
 import { useLocationFilter } from "@/lib/location-filter-context";
 import { LocationFilterIndicator } from "@/components/admin/location-filter-indicator";
 import { UnconfirmedCardPaymentsPanel, useUnconfirmedCardPayments } from "@/components/admin/unconfirmed-card-payments";
+import { EnrollmentEmailActivity, type EnrollmentEmail } from "@/components/admin/enrollment-email-activity";
 
 type Enrollment = {
   id: number;
@@ -2152,10 +2153,14 @@ type PurchaseDetails = {
     paymentReceivedEmailSentAt: string | null;
   };
   package: { id: number; name: string; price: number; creditClassroom: number | null; creditDrive: number | null } | null;
-  location: { id: number; name: string } | null;
+  location: { id: number; name: string; address?: string | null; city?: string | null; phone?: string | null } | null;
   onlineCourse: { id: number; name: string; providerName: string | null; providerUrl: string | null } | null;
   cartCustomerSnapshot: CartCustomerSnapshot | null;
   cartId: string | null;
+  reference?: string | null;
+  offering?: { id: number; name: string; startsAt: string; endsAt: string } | null;
+  classDates?: string[];
+  emails?: EnrollmentEmail[];
   payments: Array<{
     id: number;
     provider: string;
@@ -2386,10 +2391,25 @@ function PurchaseDetailsDialog({
 
               <section data-testid="section-location">
                 <h3 className="text-sm font-semibold mb-2 flex items-center gap-2">
-                  <MapPin className="h-4 w-4" /> Location
+                  <MapPin className="h-4 w-4" /> Class & location
                 </h3>
-                <div className="rounded-md border p-3">
-                  <p className="text-sm" data-testid="text-pd-location">{dash(data.location?.name)}</p>
+                <div className="rounded-md border p-3 grid grid-cols-1 sm:grid-cols-2 gap-x-4">
+                  <DetailRow
+                    label="Reference"
+                    value={data.reference ? <span className="inline-flex items-center gap-1 font-mono">{data.reference}<CopyButton value={data.reference} testId="button-copy-reference" /></span> : "—"}
+                    testId="text-pd-reference"
+                  />
+                  <DetailRow label="Class" value={dash(data.offering?.name)} testId="text-pd-class" />
+                  <DetailRow
+                    icon={Calendar}
+                    label={(data.classDates?.length ?? 0) > 1 ? "Dates" : "Date"}
+                    value={data.classDates?.length ? <span className="whitespace-pre-line">{data.classDates.join("\n")}</span> : "—"}
+                    testId="text-pd-class-dates"
+                  />
+                  <DetailRow
+                    label="Location"
+                    value={<span data-testid="text-pd-location">{dash([data.location?.name, data.location?.phone].filter(Boolean).join(" · "))}</span>}
+                  />
                 </div>
               </section>
 
@@ -2519,6 +2539,15 @@ function PurchaseDetailsDialog({
                   )}
                 </div>
               </section>
+
+              {tenantId && (
+                <EnrollmentEmailActivity
+                  tenantId={tenantId}
+                  enrollmentId={e.id}
+                  emails={data.emails ?? []}
+                  detailsQueryKey={["/api/tenants", tenantId, "enrollments", enrollment?.id, "details"]}
+                />
+              )}
             </div>
           );
         })()}

@@ -71,7 +71,8 @@ import { checkUnconfirmedPayments, recoverPayment, RecoveryError } from "./payme
 import { describePurchase, purchaseItem } from "./payments/checkout-reference";
 import { handleInboundEmailWebhook } from "./inbound-email-webhook";
 import { activateEnrollment, activateCart, confirmEnrollmentManually } from "./payments/activation-service";
-import { sendEnrollmentReceived, sendEnrollmentReceivedForCart, fireAndForget, TEMPLATE_DEFS, type EnrollmentEmailKey } from "./enrollment-emails";
+import { sendEnrollmentReceived, sendEnrollmentReceivedForCart, sendPaymentReceived, fireAndForget, TEMPLATE_DEFS, type EnrollmentEmailKey } from "./enrollment-emails";
+import { classDateLines, loadEnrollmentContext } from "./enrollment-context";
 import { sendAdminEnrollmentNotification, sendCheckoutOwnerNotification } from "./admin-enrollment-notifications";
 import { sendAdminContactNotification, sendContactConfirmationToSender, sendContactReplyEmail } from "./contact-message-notifications";
 import { getEffectiveSender } from "./email-service";
@@ -6783,18 +6784,91 @@ export async function registerRoutes(
         enrollment.cartId ? storage.getCart(enrollment.cartId) : Promise.resolve(undefined),
       ]);
 
+      // Cart purchases keep their payment on the cart, not the enrollment.
+      const ctx = await loadEnrollmentContext(enrollmentId, tenantId);
+      const allPayments = ctx?.payments.length ? ctx.payments : paymentsList;
+      const emails = await storage.listEmailsForEnrollment(tenantId, enrollmentId, allPayments.map((p) => p.id));
+
       res.json({
         enrollment,
+        reference: ctx?.reference ?? enrollment.reference ?? null,
         package: pkg ?? null,
-        location: location ?? null,
+        location: location ?? ctx?.location ?? null,
         onlineCourse: onlineCourse ?? null,
         cartCustomerSnapshot: cart?.customerSnapshotJson ?? null,
         cartId: enrollment.cartId ?? null,
-        payments: paymentsList,
+        payments: allPayments,
+        offering: ctx?.offering
+          ? { id: ctx.offering.id, name: ctx.offering.name, startsAt: ctx.offering.startsAt, endsAt: ctx.offering.endsAt }
+          : null,
+        classDates: ctx ? classDateLines(ctx) : [],
+        emails: emails.map((e) => ({
+          id: e.id,
+          kind: e.kind,
+          recipientEmail: e.recipientEmail,
+          subject: e.subject,
+          status: e.status,
+          errorMsg: e.errorMsg,
+          deliveryStatus: e.deliveryStatus,
+          deliveryUpdatedAt: e.deliveryUpdatedAt,
+          providerMessageId: e.providerMessageId,
+          sentAt: e.sentAt,
+          createdAt: e.createdAt,
+        })),
       });
     } catch (error) {
       console.error("Failed to fetch enrollment details:", error);
       res.status(500).json({ message: "Failed to fetch enrollment details" });
+    }
+  });
+
+  // Resend the customer's confirmation or the owner's notification for one
+  // enrollment (e.g. "I never got the email"). Clears the matching "sent"
+  // marker and sends again now; the result shows up in the email history.
+  app.post("/api/tenants/:tenantId/enrollments/:id/resend-email", isAuthenticated, async (req: any, res) => {
+    try {
+      const tenantId = parseInt(req.params.tenantId);
+      const enrollmentId = parseInt(req.params.id);
+      const member = await storage.getTenantMember(tenantId, req.user.claims.sub);
+      if (!member || !["tenant_admin", "office_manager", "platform_admin"].includes(member.role)) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const target = z.enum(["customer", "owner"]).parse(req.body?.target);
+      const ctx = await loadEnrollmentContext(enrollmentId, tenantId);
+      if (!ctx) return res.status(404).json({ message: "Enrollment not found" });
+      const paid = ctx.payment?.status === "COMPLETED";
+
+      if (target === "customer") {
+        if (paid) {
+          await storage.updateEnrollment(enrollmentId, tenantId, { paymentReceivedEmailSentAt: null } as any);
+          await sendPaymentReceived(enrollmentId, tenantId);
+        } else {
+          await storage.updateEnrollment(enrollmentId, tenantId, { confirmationEmailSentAt: null } as any);
+          await sendEnrollmentReceived({ ...ctx.enrollment, confirmationEmailSentAt: null }, ctx.tenant, ctx.payment);
+        }
+      } else {
+        await storage.updateEnrollment(enrollmentId, tenantId, { adminNotificationEmailSentAt: null } as any);
+        await sendAdminEnrollmentNotification(enrollmentId, tenantId);
+      }
+
+      try {
+        await storage.createAuditEvent({
+          tenantId,
+          actorUserId: req.user.claims.sub,
+          action: "enrollment.resend_email",
+          targetType: "ENROLLMENT",
+          targetId: enrollmentId,
+          details: { target },
+        });
+      } catch {}
+
+      const emails = await storage.listEmailsForEnrollment(tenantId, enrollmentId, ctx.payments.map((p) => p.id));
+      const latest = emails[0];
+      res.json({ ok: true, latest: latest ? { status: latest.status, recipientEmail: latest.recipientEmail, errorMsg: latest.errorMsg } : null });
+    } catch (error: any) {
+      if (error?.name === "ZodError") return res.status(400).json({ message: "target must be customer or owner" });
+      console.error("Resend enrollment email error:", error);
+      res.status(500).json({ message: "Failed to resend email" });
     }
   });
 

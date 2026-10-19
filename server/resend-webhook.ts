@@ -23,6 +23,13 @@ interface ResendEvent {
   };
 }
 
+const DELIVERY_STATUSES: Record<string, string> = {
+  "email.delivered": "delivered",
+  "email.delivery_delayed": "delivery_delayed",
+  "email.bounced": "bounced",
+  "email.complained": "complained",
+};
+
 const SUPPRESSION_SOURCES: Record<string, string> = {
   "email.bounced": "bounce",
   "email.complained": "complaint",
@@ -115,9 +122,15 @@ export async function processResendEvent(event: ResendEvent): Promise<{
   const type = event.type;
   if (!type) return { handled: false, reason: "missing type" };
 
-  // Delivered events: nothing to do beyond acknowledgement (could be used for
-  // analytics later).
-  if (type === "email.delivered") {
+  // Record the delivery outcome on our email log so an enrollment's email trail
+  // shows delivered / delayed / bounced next to what was sent.
+  const deliveryStatus = DELIVERY_STATUSES[type];
+  const providerMessageId = event.data?.email_id;
+  if (deliveryStatus && providerMessageId) {
+    const at = event.created_at ? new Date(event.created_at) : new Date();
+    await storage.recordEmailDelivery(providerMessageId, deliveryStatus, isNaN(at.getTime()) ? new Date() : at);
+  }
+  if (type === "email.delivered" || type === "email.delivery_delayed") {
     return { handled: true };
   }
 

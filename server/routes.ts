@@ -69,6 +69,8 @@ import { handleResendWebhook } from "./resend-webhook";
 import { handleStripeWebhook } from "./payments/stripe-webhook";
 import { checkUnconfirmedPayments, recoverPayment, RecoveryError } from "./payments/payment-recovery";
 import { describePurchase, purchaseItem } from "./payments/checkout-reference";
+import { buildClassSchedule } from "./class-schedule";
+import { getCheckoutStatus } from "./payments/checkout-status";
 import { handleInboundEmailWebhook } from "./inbound-email-webhook";
 import { activateEnrollment, activateCart, confirmEnrollmentManually } from "./payments/activation-service";
 import { sendEnrollmentReceived, sendEnrollmentReceivedForCart, sendPaymentReceived, fireAndForget, TEMPLATE_DEFS, type EnrollmentEmailKey } from "./enrollment-emails";
@@ -3745,6 +3747,43 @@ export async function registerRoutes(
     }
   });
 
+  // Public class schedule (contract C1): one row per upcoming published class,
+  // with dates, a "Mon–Thu, 6:00–9:00 PM" summary, location + phone, price,
+  // seats and the ids the storefront's Enroll button needs.
+  app.get("/api/public/tenant/:slug/class-schedule", requireApiKey, async (req, res) => {
+    try {
+      const tenant = await storage.getTenantBySlug(req.params.slug);
+      if (!tenant || !tenant.active) return res.status(404).json({ message: "School not found" });
+      const q = z.object({
+        locationId: z.coerce.number().int().positive().optional(),
+        packageId: z.coerce.number().int().positive().optional(),
+        audience: z.enum(["TEENS", "ADULTS"]).optional(),
+        from: z.coerce.date().optional(),
+        to: z.coerce.date().optional(),
+      }).safeParse(req.query);
+      if (!q.success) return res.status(400).json({ message: "Invalid filters", errors: q.error.errors });
+      res.json(await buildClassSchedule(tenant, q.data));
+    } catch (error) {
+      console.error("Class schedule error:", error);
+      res.status(500).json({ message: "Failed to load class schedule" });
+    }
+  });
+
+  // Checkout status by reference (contract C2) for the storefront thank-you
+  // page. Checks Stripe live while a card payment is still pending.
+  app.get("/api/public/tenant/:slug/checkout/:reference/status", requireApiKey, async (req, res) => {
+    try {
+      const tenant = await storage.getTenantBySlug(req.params.slug);
+      if (!tenant || !tenant.active) return res.status(404).json({ message: "School not found" });
+      const status = await getCheckoutStatus(tenant.id, String(req.params.reference));
+      if (!status) return res.status(404).json({ message: "Checkout not found" });
+      res.json(status);
+    } catch (error) {
+      console.error("Checkout status error:", error);
+      res.status(500).json({ message: "Failed to load checkout status" });
+    }
+  });
+
   // ===== ONLINE COURSES ADMIN ROUTES =====
 
   app.get("/api/tenants/:tenantId/online-courses", isAuthenticated, async (req: any, res) => {
@@ -5272,6 +5311,12 @@ export async function registerRoutes(
     receiverName: z.string().optional(),
     externalSuccessUrl: z.string().url().optional(),
     externalCancelUrl: z.string().url().optional(),
+    // Campaign attribution (C6): where the buyer came from, stored on the
+    // payment so ad spend can be tied to paid enrollments.
+    utm_source: z.string().max(200).optional(),
+    utm_medium: z.string().max(200).optional(),
+    utm_campaign: z.string().max(200).optional(),
+    gclid: z.string().max(500).optional(),
   });
 
   app.post("/api/public/tenant/:slug/checkout/start", requireApiKey, async (req, res) => {
@@ -5427,6 +5472,7 @@ export async function registerRoutes(
           enrollmentId: String(enrollment.id),
           packageName: pkg.name,
           purchase,
+          ...attributionOf(parsed.data),
           subtotalCents: String(subtotalCents),
           serviceFeeCents: String(serviceFeeCents),
           serviceFeeBps: String(settings.serviceFeeBps ?? 0),
@@ -5952,7 +5998,23 @@ export async function registerRoutes(
     receiverName: z.string().optional(),
     externalSuccessUrl: z.string().url().optional(),
     externalCancelUrl: z.string().url().optional(),
+    // Campaign attribution (C6): where the buyer came from, stored on the
+    // payment so ad spend can be tied to paid enrollments.
+    utm_source: z.string().max(200).optional(),
+    utm_medium: z.string().max(200).optional(),
+    utm_campaign: z.string().max(200).optional(),
+    gclid: z.string().max(500).optional(),
   });
+
+  function attributionOf(d: { utm_source?: string; utm_medium?: string; utm_campaign?: string; gclid?: string }) {
+    const a = {
+      ...(d.utm_source ? { utmSource: d.utm_source } : {}),
+      ...(d.utm_medium ? { utmMedium: d.utm_medium } : {}),
+      ...(d.utm_campaign ? { utmCampaign: d.utm_campaign } : {}),
+      ...(d.gclid ? { gclid: d.gclid } : {}),
+    };
+    return Object.keys(a).length ? { attribution: a } : {};
+  }
 
   // Shared execution path for cart checkout — used by both the cartId-based
   // route and the headless one-shot route.
@@ -6056,6 +6118,7 @@ export async function registerRoutes(
           cartId: cart.id,
           itemCount: String(items.length),
           purchase,
+          ...attributionOf(data),
           subtotalCents: String(subtotalCents),
           serviceFeeCents: String(serviceFeeCents),
           serviceFeeBps: String(settings.serviceFeeBps ?? 0),
@@ -6306,6 +6369,12 @@ export async function registerRoutes(
     }),
     externalSuccessUrl: z.string().url().optional(),
     externalCancelUrl: z.string().url().optional(),
+    // Campaign attribution (C6): where the buyer came from, stored on the
+    // payment so ad spend can be tied to paid enrollments.
+    utm_source: z.string().max(200).optional(),
+    utm_medium: z.string().max(200).optional(),
+    utm_campaign: z.string().max(200).optional(),
+    gclid: z.string().max(500).optional(),
   });
 
   app.post("/api/public/tenant/:slug/online-course-checkout/start", requireApiKey, async (req, res) => {
@@ -6412,6 +6481,7 @@ export async function registerRoutes(
           onlineCourseName: course.name,
           isOnlineCourse: "true",
           purchase: coursePurchase,
+          ...attributionOf(parsed.data),
           subtotalCents: String(subtotalCents),
           serviceFeeCents: String(serviceFeeCents),
           serviceFeeBps: String(settings.serviceFeeBps ?? 0),

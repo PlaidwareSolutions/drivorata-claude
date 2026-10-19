@@ -122,3 +122,12 @@ test("a bounce is recorded on the email and suppresses the address", async () =>
     .where(and(eq(emailUnsubscribes.tenantId, tenantId), eq(emailUnsubscribes.email, "bounce@example.com")));
   assert.equal(supp.length, 1);
 });
+
+test("passes Reply-To to Resend only when given", async () => {
+  const fake = fakeResend([{ data: { id: "msg_reply_1" } }]);
+  __setResendClientForTests(fake.client);
+  await sendEmail({ tenantId, to: "r@example.com", subject: "s", body: "b", replyTo: "owner@example.com" });
+  await sendEmail({ tenantId, to: "r@example.com", subject: "s", body: "b" });
+  assert.equal(fake.calls[0].replyTo, "owner@example.com");
+  assert.equal("replyTo" in fake.calls[1], false);
+});

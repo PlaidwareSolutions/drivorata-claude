@@ -63,11 +63,16 @@ app.get("/api/health", async (_req, res) => {
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
+  // Response bodies are never logged: checkout, cart and enrollment
+  // responses carry students' names, emails and phone numbers. Error
+  // responses keep their short `message` so failures stay diagnosable.
+  let errorMessage: string | undefined;
 
   const originalResJson = res.json;
   res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
+    if (res.statusCode >= 400 && typeof bodyJson?.message === "string") {
+      errorMessage = bodyJson.message.slice(0, 200);
+    }
     return originalResJson.apply(res, [bodyJson, ...args]);
   };
 
@@ -75,10 +80,7 @@ app.use((req, res, next) => {
     const duration = Date.now() - start;
     if (path.startsWith("/api") && path !== "/api/health") {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-
+      if (errorMessage) logLine += ` :: ${errorMessage}`;
       log(logLine);
     }
   });

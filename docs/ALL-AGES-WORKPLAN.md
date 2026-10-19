@@ -2,7 +2,7 @@
 
 Shared between the **backend** (`drivorata-claude`, "B") and **storefront**
 (`drivorata-tenant-claude`, "T") agents. B maintains this file; T reads it.
-Status as of **2026-10-19 22:35 UTC**. Supersedes the per-repo plans where they differ.
+Status as of **2026-10-20 00:15 UTC**. Supersedes the per-repo plans where they differ.
 
 ## Where things stand
 
@@ -12,10 +12,10 @@ Status as of **2026-10-19 22:35 UTC**. Supersedes the per-repo plans where they 
 | #4 payment ↔ class/date not connected | **Fixed (B, live).** Every checkout has a reference (`AA-7K3F9Q`) and a frozen class snapshot; Stripe description shows class/location/date/ref; admin **Payments** page with search + CSV. |
 | #5 confusing payment-status emails | **Fixed (B, live).** No email at card-checkout start; owner subjects `PAID —` / `CASH DUE —` / `NOT PAID —`; one customer confirmation after payment. |
 | #6 email troubleshooting | **Done (B, live).** Email history with delivery badges + resend in the admin; Resend delivery events confirmed arriving. `docs/ENROLLMENT-TROUBLESHOOTING.md`. |
-| #1 phones by location | **Done, awaiting storefront cutover.** Data verified live; emails use the location's phone; storefront shows all three labeled numbers (T PR #2, merged) — customers see it after Wave 2. |
-| #2 simple schedule → enroll → pay | **B endpoints live** (C1, C2, C6). T page is Wave 3. Live schedule today: 4 classes, all Pasadena — none published for Cypress or Sugar Land (ask the owner). |
+| #1 phones by location | **Done, live.** All three labeled numbers on the site; emails use the location's phone. |
+| #2 simple schedule → enroll → pay | **Done, live** (`/schedule`, Enroll Now → pay step, honest thank-you page). Only Pasadena has published classes (ask the owner). |
 | #7/#8 Chase via Authorize.net | **Blocked** on the owner's sandbox account. |
-| #9 traffic | **Campaign capture done** (T sends UTM/gclid, B stores them). `www` still broken until Wave 2. Analytics/SEO is Wave 6. |
+| #9 traffic | **Campaign capture live; `www` fixed.** Analytics/SEO is Wave 6 (now). |
 | Recovery of past paid payments | **Tool live; owner working through it** (Enrollments → Unconfirmed card payments). 96 charges / $20,573.50 since May. |
 
 Hosting: `drivorata.com` (backend) is on Railway since 2026-10-18, Cloudflare-proxied.
@@ -81,10 +81,10 @@ comes before the schedule work, and it also fixes `www`.
 |---|---|---|---|---|
 | **1 — done** | — | Build **C1, C2, C6** + `headless-api.md`; deploy to `drivorata.com` | See "T — Wave 1 instructions" below | Approve a storefront cutover window (GoDaddy NS → Cloudflare); owner: start Authorize.net sandbox; owner: keep recovering payments |
 | **2 — storefront cutover: done** | ✔ | Watch backend logs/API errors from the new storefront | Run its runbook: NS flip, apex + `www` CNAMEs, content-type checks, mail test; keep Replit stopped-not-deleted | Do the GoDaddy NS change (needs your login) |
-| **3 — schedule & thank-you (now)** | C1 + C2 live ✔, Wave 2 done ✔ | Support; adjust C1 fields on request | `/schedule` table + filters, Enroll Now deep link, "You're enrolling in" card, thank-you polls C2, home "next classes", nav CTA | Owner: fill in each class's description ("details") in admin |
+| **3 — schedule & thank-you: done** | ✔ | Support; adjust C1 fields on request | `/schedule` table + filters, Enroll Now deep link, "You're enrolling in" card, thank-you polls C2, home "next classes", nav CTA | Owner: fill in each class's description ("details") in admin |
 | **4 — Authorize.net** | Sandbox credentials exist | Provider interface; `AUTHORIZE_NET` adapter (Accept Hosted, `invoiceNumber = reference`), webhook + reconcile, encrypted keys, void/refund | Card label/icon for `AUTHORIZE_NET`; no flow change | Owner: production API Login ID / Transaction Key / Signature Key (no owner login); confirm with Chase nothing else uses the current key |
 | **5 — Stripe off** | 3–5 clean days on Authorize.net | Disable Stripe for the tenant (instant rollback) | Remove Stripe-only bits | Owner OK |
-| **6 — traffic** | Wave 3 live | — (C6 already records campaigns) | GA4 + Google Ads conversion (`purchase` only when C2 says `paid`), titles/meta, JSON-LD per location, sitemap/robots | Owner: 3 Google Business Profiles with the right phones; Search Console; ads |
+| **6 — traffic (now)** | Wave 3 live ✔ | — (C6 already records campaigns) | GA4 + Google Ads conversion (`purchase` only when C2 says `paid`), titles/meta, JSON-LD per location, sitemap/robots | Owner: 3 Google Business Profiles with the right phones; Search Console; ads |
 
 ### Wave 1 result
 
@@ -100,20 +100,32 @@ comes before the schedule work, and it also fixes `www`.
 - `www` on Railway 22:09, certificate valid 22:11. Apex CNAME (flattened) 22:13, certificate valid by 22:29 — **plan B not needed**. B verified independently: both hosts serve `railway-hikari` with their own Let's Encrypt certificates, `/api/nope` is a JSON 404 (new app), and the backend's public API calls now come from the Railway storefront (none from Replit).
 - **Open:** the user's mail round-trip test.
 
-### T — current instructions (Wave 3)
+### Wave 3 result (2026-10-19)
 
-1. Merge **PR #3** (schedule page, "You're enrolling in" card, thank-you polling C2, home "Upcoming Classes", nav) once your own post-cutover checks pass.
-2. On the live site, verify `/schedule` (filters, 390px), one Enroll Now to the Stripe page without paying (student "TEST — do not contact"), and the thank-you page for that reference showing the *not completed / processing* state — not "enrolled".
-3. Update your runbook with the new targets and the zone-purge lesson. Keep Replit running; stopping it needs the user's explicit OK after the watch window.
-4. Report when Wave 3 is live; B then confirms schedule/status calls and the test reference from its logs.
+- T PR #3 (schedule, enrolling-in card, C2 polling, home "Upcoming Classes", nav) and PR #4 (phone wrap) merged and live.
+- B verified test checkout `AA-A2JBR3`: pending, $425 incl. $15 fee, Nov 2 Pasadena class + phone, attribution `wave3test / test / live-verification`; live logs show class-schedule, checkout-status and cart-checkout calls.
+
+### School email (2026-10-20)
+
+The owner doesn't use `info@allagesdrivingschool.com`; his school email is `ajh0786@yahoo.com` (the tenant email). B cleared `info@` from all three locations (audited, reversible in Admin → Locations), so the site and customer emails fall back to the school email. Customer emails now **reply to the school email**; owner notifications reply to the student. Setting up a real school mailbox is a later item. The DNS mail test is therefore moot.
+
+### T — current instructions (Wave 6)
+
+1. Remove the hardcoded `FALLBACK_EMAIL` (`info@…`); show only the school email from the API; on load failure show the three phones and no email.
+2. One PR:
+   - GA4 + Google Ads conversion, IDs from env vars, inert when unset. Events `view_schedule`, `select_class`, `begin_checkout`, and `purchase` once per reference, only when C2 returns `paid`, with value.
+   - Per-route titles + meta descriptions, rendered server-side for key routes.
+   - `DrivingSchool` JSON-LD per location (address, the right phone).
+   - `sitemap.xml` + `robots.txt`.
+3. Report the PR; don't merge until the user has seen it. Leave Replit running.
 
 Decisions already made: Accept Hosted; Stripe and Authorize.net run side by side, then Stripe off; header/footer list all three phones.
 
 ## Open items for you
 
-1. **Mail test** — send from an outside account to a school mailbox and reply back; both must arrive.
-2. **Watch window** — after 24–48 h of normal traffic, decide on stopping/decommissioning Replit (backend deployment is already stopped; the storefront deployment still runs).
-3. **Ask the owner** why only Pasadena has published classes, and to fill in each class's description (the schedule's "Details" column).
-4. **Tell the owner** about Oct 18's $90 customer (three tries; the third was paid and is now confirmed).
-5. **Rotate** the Railway Postgres and Neon passwords that appeared in a session transcript; delete the Cloudflare tokens after the cutover (the new zone token expires on its own in about a week).
+1. **Watch window** — after 24–48 h of normal traffic, decide on stopping/decommissioning Replit (backend deployment is already stopped; the storefront deployment still runs).
+2. **Ask the owner** why only Pasadena has published classes, and to fill in each class's description (the schedule's "Details" column).
+3. **Tell the owner** about Oct 18's $90 customer (three tries; the third was paid and is now confirmed).
+4. **Rotate** the Railway Postgres and Neon passwords that appeared in a session transcript; delete the Cloudflare tokens after the cutover (the new zone token expires on its own in about a week).
+5. **GA4 / Google Ads IDs** for Wave 6 (owner's accounts, or create them).
 6. Owner: start the Authorize.net sandbox (Wave 4); keep working through Unconfirmed card payments.

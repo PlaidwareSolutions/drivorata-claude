@@ -140,7 +140,7 @@ function renderHtmlBody(banner: string, bannerColor: string, schoolName: string,
 async function deliver(
   tenant: Tenant,
   msg: { subject: string; body: string; html: string },
-  trace: { kind: EmailKind; enrollmentId?: number | null; paymentId?: number | null },
+  trace: { kind: EmailKind; enrollmentId?: number | null; paymentId?: number | null; replyTo?: string | null },
   label: string,
 ): Promise<boolean> {
   const recipients = await getAdminRecipients(tenant);
@@ -300,7 +300,8 @@ export async function sendAdminEnrollmentNotification(
   const delivered = await deliver(
     ctx.tenant,
     buildEnrollmentMessage(ctx, state),
-    { kind, enrollmentId, paymentId: ctx.payment?.id ?? null },
+    // Replying to the notification writes to the student.
+    { kind, enrollmentId, paymentId: ctx.payment?.id ?? null, replyTo: ctx.enrollment.email },
     `${state} enrollment#${enrollmentId}`,
   );
   if (!delivered && state === "PAID") {
@@ -407,7 +408,12 @@ export async function sendCheckoutOwnerNotification(paymentId: number, kind: Che
       body: renderTextBody(banner.text, tenant.name, sections, link),
       html: renderHtmlBody(banner.text, banner.color, tenant.name, sections, link),
     },
-    { kind: kind === "not_paid" ? "owner_not_paid" : "owner_cash_due", enrollmentId: payment.enrollmentId, paymentId: payment.id },
+    {
+      kind: kind === "not_paid" ? "owner_not_paid" : "owner_cash_due",
+      enrollmentId: payment.enrollmentId,
+      paymentId: payment.id,
+      replyTo: customer.email || null,
+    },
     `${kind} payment#${payment.id}`,
   );
   if (!delivered) await releasePaymentNotification(payment.id, key);

@@ -1,6 +1,8 @@
 import { storage } from "../storage";
 import type { Payment } from "@shared/schema";
 import { retrieveStripeCheckoutSession } from "./stripe-adapter";
+import { findTransactionByInvoice } from "./authorizenet-adapter";
+import { authnetCredentials } from "./card-checkout";
 import { completeProviderPayment } from "./complete-payment";
 
 // Recovery for card payments the provider took but Drivorata never confirmed
@@ -30,7 +32,41 @@ export class RecoveryError extends Error {
 
 const RECOVERABLE = new Set(["PENDING", "EXPIRED", "FAILED"]);
 
+// Hosted pages can be reopened (fresh token) until then; after it an unpaid
+// Authorize.net checkout is treated like an expired Stripe session.
+const AUTHNET_CHECKOUT_LIFETIME_MS = 24 * 3600_000;
+
+async function checkAuthnetPayment(payment: Payment): Promise<ProviderCheck> {
+  const settings = await storage.getTenantPaymentSettings(payment.tenantId);
+  const creds = authnetCredentials(settings);
+  if (!creds) throw new RecoveryError("Authorize.net is not configured for this school");
+  if (!payment.reference) throw new RecoveryError("Payment has no reference to look up");
+  const tx = await findTransactionByInvoice(creds, payment.reference);
+  const check: ProviderCheck = {
+    checkedAt: new Date().toISOString(),
+    paid: !!tx?.paid,
+    sessionStatus: tx ? "complete" : "open",
+    paymentStatus: tx?.status || "no transaction",
+    paymentIntentId: tx?.transId ?? null,
+    chargeId: tx?.transId ?? null,
+    amountCents: tx?.amountCents ?? null,
+    customerEmail: null,
+    paidAt: tx?.paid && tx.submittedAt ? tx.submittedAt.toISOString() : null,
+  };
+  const patch: Record<string, unknown> = {
+    metadataJson: { ...((payment.metadataJson as Record<string, unknown>) || {}), providerCheck: check },
+  };
+  const age = Date.now() - new Date(payment.createdAt ?? Date.now()).getTime();
+  if (!check.paid && payment.status === "PENDING" && age > AUTHNET_CHECKOUT_LIFETIME_MS) {
+    patch.status = "EXPIRED";
+    check.sessionStatus = "expired";
+  }
+  await storage.updatePayment(payment.id, patch as any);
+  return check;
+}
+
 export async function checkProviderPayment(payment: Payment): Promise<ProviderCheck> {
+  if (payment.provider === "AUTHORIZE_NET") return checkAuthnetPayment(payment);
   if (payment.provider !== "STRIPE") throw new RecoveryError(`Cannot check ${payment.provider} payments`);
   if (!payment.providerOrderId) throw new RecoveryError("Payment never reached Stripe (no checkout session)");
   const settings = await storage.getTenantPaymentSettings(payment.tenantId);

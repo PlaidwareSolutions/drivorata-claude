@@ -50,6 +50,12 @@ const paymentSettingsSchema = z.object({
   // Flat per-transaction admin fee in dollars. Converted to integer cents on
   // submit. Server cap is $100 (10000 cents) — see shared/service-fee.ts.
   serviceFeeFlat: z.number().min(0).max(100),
+  authnetEnabled: z.boolean(),
+  authnetApiLoginId: z.string().optional().default(""),
+  authnetTransactionKey: z.string().optional().default(""),
+  authnetSignatureKey: z.string().optional().default(""),
+  authnetMode: z.enum(["sandbox", "production"]).default("sandbox"),
+  cardProvider: z.enum(["STRIPE", "AUTHORIZE_NET"]).default("STRIPE"),
 });
 
 type PaymentSettingsFormValues = z.infer<typeof paymentSettingsSchema>;
@@ -61,7 +67,10 @@ type CredentialFieldName =
   | "stripePublishableKey"
   | "stripeWebhookSecret"
   | "paypalClientId"
-  | "paypalClientSecret";
+  | "paypalClientSecret"
+  | "authnetApiLoginId"
+  | "authnetTransactionKey"
+  | "authnetSignatureKey";
 
 type SavedBadgeProps = {
   fieldName: CredentialFieldName;
@@ -146,6 +155,8 @@ export default function PaymentSettingsPage() {
   const [paypalTestResult, setPaypalTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [testingStripe, setTestingStripe] = useState(false);
   const [testingPaypal, setTestingPaypal] = useState(false);
+  const [authnetTestResult, setAuthnetTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [testingAuthnet, setTestingAuthnet] = useState(false);
   const [cleaningUp, setCleaningUp] = useState(false);
 
   const { data: settings, isLoading } = useQuery({
@@ -197,6 +208,12 @@ export default function PaymentSettingsPage() {
       expireAfterHours: 2,
       serviceFeePct: 0,
       serviceFeeFlat: 0,
+      authnetEnabled: false,
+      authnetApiLoginId: "",
+      authnetTransactionKey: "",
+      authnetSignatureKey: "",
+      authnetMode: "sandbox",
+      cardProvider: "STRIPE",
     },
   });
 
@@ -227,6 +244,12 @@ export default function PaymentSettingsPage() {
       expireAfterHours: settings.expireAfterHours ?? 2,
       serviceFeePct: ((settings.serviceFeeBps ?? 0) as number) / 100,
       serviceFeeFlat: ((settings.serviceFeeFlatCents ?? 0) as number) / 100,
+      authnetEnabled: settings.authnetEnabled ?? false,
+      authnetApiLoginId: settings.authnetApiLoginId ?? "",
+      authnetTransactionKey: settings.authnetTransactionKey ?? "",
+      authnetSignatureKey: settings.authnetSignatureKey ?? "",
+      authnetMode: settings.authnetMode ?? "sandbox",
+      cardProvider: settings.cardProvider ?? "STRIPE",
     });
     lastResetForRef.current = { tenantId, loaded: true };
   }, [settings, tenantId, form]);
@@ -285,6 +308,33 @@ export default function PaymentSettingsPage() {
       setStripeTestResult({ success: false, message: "Connection failed" });
     } finally {
       setTestingStripe(false);
+    }
+  }
+
+  async function testAuthnetConnection() {
+    setTestingAuthnet(true);
+    setAuthnetTestResult(null);
+    try {
+      const res = await fetch(`/api/tenants/${tenantId}/payment-settings/test-authnet`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          authnetApiLoginId: form.getValues("authnetApiLoginId") ?? "",
+          authnetTransactionKey: form.getValues("authnetTransactionKey") ?? "",
+          authnetMode: form.getValues("authnetMode") ?? "sandbox",
+        }),
+      });
+      const result = await res.json();
+      const ok = res.ok && result.ok === true;
+      setAuthnetTestResult({
+        success: ok,
+        message: ok ? `Connected (${result.mode})` : result.error || "Connection failed",
+      });
+    } catch {
+      setAuthnetTestResult({ success: false, message: "Connection failed" });
+    } finally {
+      setTestingAuthnet(false);
     }
   }
 
@@ -637,6 +687,142 @@ export default function PaymentSettingsPage() {
               </CardContent>
             </Card>
           </div>
+
+          <Card className="mb-6" data-testid="card-authnet">
+            <CardHeader className="flex flex-row items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <Shield className="h-5 w-5" />
+                <CardTitle className="text-lg">Authorize.net (Chase)</CardTitle>
+              </div>
+              <FormField
+                control={form.control}
+                name="authnetEnabled"
+                render={({ field }) => (
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="authnet-toggle" className="text-sm text-muted-foreground">
+                      {field.value ? "Enabled" : "Disabled"}
+                    </Label>
+                    <Switch id="authnet-toggle" checked={field.value} onCheckedChange={field.onChange} data-testid="switch-authnet-enabled" />
+                  </div>
+                )}
+              />
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <CardDescription>
+                Customers pay on Authorize.net's secure page; card details never reach this site. In the Authorize.net
+                Merchant Interface (Account → Settings → API Credentials &amp; Keys) create the keys below, and under
+                Account → Webhooks add <code>{window.location.origin}/api/webhooks/authorizenet</code> with the events{" "}
+                <code>net.authorize.payment.authcapture.created</code>, <code>net.authorize.payment.fraud.held</code> and{" "}
+                <code>net.authorize.payment.fraud.approved</code>.
+              </CardDescription>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <FormField
+                  control={form.control}
+                  name="authnetApiLoginId"
+                  render={({ field }) => (
+                    <FormItem>
+                      <div className="flex items-center justify-between">
+                        <FormLabel>API Login ID</FormLabel>
+                        <SavedBadge fieldName="authnetApiLoginId" current={field.value} settings={settings} />
+                      </div>
+                      <FormControl>
+                        <Input {...field} type="text" autoComplete="off" data-1p-ignore data-lpignore="true" data-form-type="other" data-testid="input-authnet-login-id" />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="authnetMode"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Mode</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value}>
+                        <FormControl>
+                          <SelectTrigger data-testid="select-authnet-mode">
+                            <SelectValue placeholder="Select mode" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="sandbox">Sandbox (testing)</SelectItem>
+                          <SelectItem value="production">Production (real payments)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="authnetTransactionKey"
+                  render={({ field }) => (
+                    <FormItem>
+                      <div className="flex items-center justify-between">
+                        <FormLabel>Transaction Key</FormLabel>
+                        <SavedBadge fieldName="authnetTransactionKey" current={field.value} settings={settings} />
+                      </div>
+                      <FormControl>
+                        <SecretInput name={field.name} value={field.value ?? ""} onChange={field.onChange} onBlur={field.onBlur} placeholder="Transaction Key" testId="input-authnet-transaction-key" />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="authnetSignatureKey"
+                  render={({ field }) => (
+                    <FormItem>
+                      <div className="flex items-center justify-between">
+                        <FormLabel>Signature Key (required)</FormLabel>
+                        <SavedBadge fieldName="authnetSignatureKey" current={field.value} settings={settings} />
+                      </div>
+                      <FormControl>
+                        <SecretInput name={field.name} value={field.value ?? ""} onChange={field.onChange} onBlur={field.onBlur} placeholder="Signature Key" testId="input-authnet-signature-key" />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+              <FormField
+                control={form.control}
+                name="cardProvider"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Card payments on the website use</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger className="sm:max-w-xs" data-testid="select-card-provider">
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="STRIPE">Stripe</SelectItem>
+                        <SelectItem value="AUTHORIZE_NET">Authorize.net (Chase)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Customers see one "Credit/Debit card" option. Switching back to Stripe takes effect immediately.
+                    </p>
+                  </FormItem>
+                )}
+              />
+              <div className="flex items-center gap-4">
+                <Button type="button" variant="outline" size="sm" onClick={testAuthnetConnection} disabled={testingAuthnet} data-testid="button-test-authnet">
+                  {testingAuthnet ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                  Test Connection
+                </Button>
+                {authnetTestResult && (
+                  <div className="flex items-center gap-1 text-sm" data-testid="text-authnet-test-result">
+                    {authnetTestResult.success ? <CheckCircle className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />}
+                    <span className={authnetTestResult.success ? "text-green-600" : "text-red-600"}>{authnetTestResult.message}</span>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
 
           <Card className="mb-6">
             <CardHeader className="flex flex-row items-center justify-between gap-4">

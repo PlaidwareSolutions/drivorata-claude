@@ -71,6 +71,9 @@ import { checkUnconfirmedPayments, recoverPayment, RecoveryError } from "./payme
 import { describePurchase, purchaseItem } from "./payments/checkout-reference";
 import { buildClassSchedule } from "./class-schedule";
 import { getCheckoutStatus } from "./payments/checkout-status";
+import { cardProviderReady, preferredCardProvider, startCardCheckout } from "./payments/card-checkout";
+import { authnetMode, testAuthnetConnection } from "./payments/authorizenet-adapter";
+import { handleAuthnetWebhook, renderAuthnetPayPage } from "./payments/authorizenet-checkout";
 import { handleInboundEmailWebhook } from "./inbound-email-webhook";
 import { activateEnrollment, activateCart, confirmEnrollmentManually } from "./payments/activation-service";
 import { sendEnrollmentReceived, sendEnrollmentReceivedForCart, sendPaymentReceived, fireAndForget, TEMPLATE_DEFS, type EnrollmentEmailKey } from "./enrollment-emails";
@@ -5113,14 +5116,15 @@ export async function registerRoutes(
           expireAfterHours: 2,
           serviceFeeBps: 0,
           serviceFeeFlatCents: 0,
+          authnetEnabled: false,
+          authnetApiLoginId: "",
+          authnetTransactionKey: "",
+          authnetSignatureKey: "",
+          authnetMode: "sandbox",
+          cardProvider: "STRIPE",
         });
       }
-      res.json({
-        ...settings,
-        stripeSecretKey: settings.stripeSecretKey ? maskKey(settings.stripeSecretKey) : "",
-        stripeWebhookSecret: settings.stripeWebhookSecret ? maskKey(settings.stripeWebhookSecret) : "",
-        paypalClientSecret: settings.paypalClientSecret ? maskKey(settings.paypalClientSecret) : "",
-      });
+      res.json(maskPaymentSettings(settings));
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch payment settings" });
     }
@@ -5146,7 +5150,21 @@ export async function registerRoutes(
     // a typo can't quietly add a huge charge. 0 disables. May be combined with
     // serviceFeeBps — either, both, or neither is valid.
     serviceFeeFlatCents: z.number().int().min(0).max(MAX_SERVICE_FEE_FLAT_CENTS).optional(),
+    authnetEnabled: z.boolean().optional(),
+    authnetApiLoginId: z.string().trim().max(50).optional(),
+    authnetTransactionKey: z.string().trim().max(100).optional(),
+    authnetSignatureKey: z.string().trim().max(200).optional(),
+    authnetMode: z.enum(["sandbox", "production"]).optional(),
+    cardProvider: z.enum(["STRIPE", "AUTHORIZE_NET"]).optional(),
   });
+
+  // Secrets never leave the server whole; "****" in a PUT means "keep it".
+  const PAYMENT_SECRET_FIELDS = ["stripeSecretKey", "stripeWebhookSecret", "paypalClientSecret", "authnetTransactionKey", "authnetSignatureKey"] as const;
+  function maskPaymentSettings<T extends Record<string, any>>(settings: T): T {
+    const out: Record<string, any> = { ...settings };
+    for (const f of PAYMENT_SECRET_FIELDS) out[f] = settings[f] ? maskKey(settings[f]) : "";
+    return out as T;
+  }
 
   app.put("/api/tenants/:tenantId/payment-settings", isAuthenticated, async (req: any, res) => {
     try {
@@ -5184,17 +5202,44 @@ export async function registerRoutes(
           delete data.paypalClientSecret;
         }
       }
+      for (const f of ["authnetTransactionKey", "authnetSignatureKey"] as const) {
+        if (typeof data[f] === "string" && data[f].includes("****")) {
+          if (existing?.[f]) data[f] = existing[f];
+          else delete data[f];
+        }
+      }
 
       const settings = await storage.upsertTenantPaymentSettings(data);
-      res.json({
-        ...settings,
-        stripeSecretKey: settings.stripeSecretKey ? maskKey(settings.stripeSecretKey) : "",
-        stripeWebhookSecret: settings.stripeWebhookSecret ? maskKey(settings.stripeWebhookSecret) : "",
-        paypalClientSecret: settings.paypalClientSecret ? maskKey(settings.paypalClientSecret) : "",
-      });
+      res.json(maskPaymentSettings(settings));
     } catch (error) {
       console.error("Failed to update payment settings:", error);
       res.status(500).json({ message: "Failed to update payment settings" });
+    }
+  });
+
+  app.post("/api/tenants/:tenantId/payment-settings/test-authnet", isAuthenticated, async (req: any, res) => {
+    try {
+      const tenantId = parseInt(req.params.tenantId);
+      const member = await storage.getTenantMember(tenantId, req.user.claims.sub);
+      if (!member || !["tenant_admin", "platform_admin"].includes(member.role)) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      const body = z.object({
+        authnetApiLoginId: z.string().optional(),
+        authnetTransactionKey: z.string().optional(),
+        authnetMode: z.enum(["sandbox", "production"]).optional(),
+      }).safeParse(req.body ?? {});
+      const saved = await storage.getTenantPaymentSettings(tenantId);
+      const formKey = body.success ? (body.data.authnetTransactionKey ?? "").trim() : "";
+      const apiLoginId = (body.success && body.data.authnetApiLoginId?.trim()) || saved?.authnetApiLoginId || "";
+      const transactionKey = formKey && !formKey.includes("****") ? formKey : saved?.authnetTransactionKey || "";
+      const mode = authnetMode((body.success && body.data.authnetMode) || saved?.authnetMode);
+      if (!apiLoginId || !transactionKey) {
+        return res.status(400).json({ ok: false, error: "Enter the API Login ID and Transaction Key, then test again." });
+      }
+      res.json({ ...(await testAuthnetConnection({ apiLoginId, transactionKey, mode })), mode });
+    } catch (error) {
+      res.status(500).json({ ok: false, error: "Test failed" });
     }
   });
 
@@ -5288,7 +5333,7 @@ export async function registerRoutes(
   // ===== PUBLIC CHECKOUT ROUTES =====
 
   const checkoutStartSchema = z.object({
-    provider: z.enum(["STRIPE", "PAYPAL", "CASH"]),
+    provider: z.enum(["STRIPE", "PAYPAL", "CASH", "AUTHORIZE_NET"]),
     packageId: z.number(),
     locationId: z.number().nullable().optional(),
     student: z.object({
@@ -5397,6 +5442,14 @@ export async function registerRoutes(
           CartCheckoutErrorCode.PAYMENT_PROVIDER_NOT_CONFIGURED,
           "Stripe is not enabled for this school",
           { provider: "STRIPE" },
+        );
+      }
+      if (provider === "AUTHORIZE_NET" && !cardProviderReady(settings, "AUTHORIZE_NET")) {
+        return sendCartCheckoutError(
+          res,
+          CartCheckoutErrorCode.PAYMENT_PROVIDER_NOT_CONFIGURED,
+          "Card payments (Authorize.net) are not enabled for this school",
+          { provider: "AUTHORIZE_NET" },
         );
       }
       if (provider === "PAYPAL" && (!settings.paypalEnabled || !settings.paypalClientId || !settings.paypalClientSecret)) {
@@ -5516,13 +5569,13 @@ export async function registerRoutes(
 
       let redirectUrl: string;
 
-      if (provider === "STRIPE") {
-        const result = await createStripeCheckoutSession({
-          secretKey: settings.stripeSecretKey!,
+      if (provider !== "PAYPAL") {
+        const result = await startCardCheckout(provider, settings, payment, {
           amountCents: grossAmountCents,
           currency: "USD",
           description: describePurchase(purchase, payment.reference),
           reference: payment.reference,
+          customerEmail: student.email,
           successUrl,
           cancelUrl,
           metadata: {
@@ -5534,7 +5587,7 @@ export async function registerRoutes(
         });
 
         await storage.updatePayment(payment.id, {
-          providerOrderId: result.sessionId,
+          providerOrderId: result.providerOrderId,
           status: "PENDING",
         } as any);
 
@@ -5981,7 +6034,7 @@ export async function registerRoutes(
 
   const cartCheckoutSchema = z.object({
     cartId: z.string().min(1).optional(), // populated by /cart-checkout/start; absent on /headless (server builds the cart)
-    provider: z.enum(["STRIPE", "PAYPAL", "CASH"]),
+    provider: z.enum(["STRIPE", "PAYPAL", "CASH", "AUTHORIZE_NET"]),
     student: z.object({
       firstName: z.string().min(1),
       lastName: z.string().min(1),
@@ -6064,6 +6117,7 @@ export async function registerRoutes(
       const settings = await storage.getTenantPaymentSettings(tenant.id);
       if (!settings) return sendCartCheckoutError(res, CartCheckoutErrorCode.PAYMENT_PROVIDER_NOT_CONFIGURED, "Payment not configured");
       if (provider === "STRIPE" && (!settings.stripeEnabled || !settings.stripeSecretKey)) return sendCartCheckoutError(res, CartCheckoutErrorCode.PAYMENT_PROVIDER_NOT_CONFIGURED, "Stripe not enabled", { provider: "STRIPE" });
+      if (provider === "AUTHORIZE_NET" && !cardProviderReady(settings, "AUTHORIZE_NET")) return sendCartCheckoutError(res, CartCheckoutErrorCode.PAYMENT_PROVIDER_NOT_CONFIGURED, "Authorize.net not enabled", { provider: "AUTHORIZE_NET" });
       if (provider === "PAYPAL" && (!settings.paypalEnabled || !settings.paypalClientId || !settings.paypalClientSecret)) return sendCartCheckoutError(res, CartCheckoutErrorCode.PAYMENT_PROVIDER_NOT_CONFIGURED, "PayPal not enabled", { provider: "PAYPAL" });
       if (provider === "CASH" && !settings.cashEnabled) return sendCartCheckoutError(res, CartCheckoutErrorCode.PAYMENT_PROVIDER_NOT_CONFIGURED, "Cash not enabled", { provider: "CASH" });
 
@@ -6178,13 +6232,13 @@ export async function registerRoutes(
       // in checkout_pending.
       let redirectUrl: string;
       try {
-        if (provider === "STRIPE") {
-          const result = await createStripeCheckoutSession({
-            secretKey: settings.stripeSecretKey!,
+        if (provider !== "PAYPAL") {
+          const result = await startCardCheckout(provider, settings, payment, {
             amountCents: totalCents,
             currency: "USD",
             description: describePurchase(purchase, payment.reference),
             reference: payment.reference,
+            customerEmail: student.email,
             successUrl, cancelUrl,
             metadata: {
               tenantId: String(tenant.id),
@@ -6194,7 +6248,7 @@ export async function registerRoutes(
               offeringIds: items.map((i) => i.offeringId).filter(Boolean).join(","),
             },
           });
-          await storage.updatePayment(payment.id, { providerOrderId: result.sessionId, status: "PENDING" });
+          await storage.updatePayment(payment.id, { providerOrderId: result.providerOrderId, status: "PENDING" });
           redirectUrl = result.redirectUrl;
         } else {
           const result = await createPayPalOrder({
@@ -6358,7 +6412,7 @@ export async function registerRoutes(
   // ===== ONLINE COURSE CHECKOUT =====
 
   const onlineCourseCheckoutSchema = z.object({
-    provider: z.enum(["STRIPE", "PAYPAL", "CASH"]),
+    provider: z.enum(["STRIPE", "PAYPAL", "CASH", "AUTHORIZE_NET"]),
     onlineCourseId: z.number(),
     locationId: z.number().int().positive().optional(),
     student: z.object({
@@ -6419,6 +6473,9 @@ export async function registerRoutes(
 
       if (provider === "STRIPE" && (!settings.stripeEnabled || !settings.stripeSecretKey)) {
         return res.status(400).json({ message: "Stripe is not enabled for this school" });
+      }
+      if (provider === "AUTHORIZE_NET" && !cardProviderReady(settings, "AUTHORIZE_NET")) {
+        return res.status(400).json({ message: "Card payments (Authorize.net) are not enabled for this school" });
       }
       if (provider === "PAYPAL" && (!settings.paypalEnabled || !settings.paypalClientId || !settings.paypalClientSecret)) {
         return res.status(400).json({ message: "PayPal is not enabled for this school" });
@@ -6517,13 +6574,13 @@ export async function registerRoutes(
       let redirectUrl: string;
 
       try {
-        if (provider === "STRIPE") {
-          const result = await createStripeCheckoutSession({
-            secretKey: settings.stripeSecretKey!,
+        if (provider !== "PAYPAL") {
+          const result = await startCardCheckout(provider, settings, payment, {
             amountCents: grossAmountCents,
             currency: "USD",
             description: describePurchase(coursePurchase, payment.reference),
             reference: payment.reference,
+            customerEmail: student.email,
             successUrl,
             cancelUrl,
             metadata: {
@@ -6536,7 +6593,7 @@ export async function registerRoutes(
           });
 
           await storage.updatePayment(payment.id, {
-            providerOrderId: result.sessionId,
+            providerOrderId: result.providerOrderId,
             status: "PENDING",
           } as any);
 
@@ -6607,6 +6664,11 @@ export async function registerRoutes(
   // ===== STRIPE WEBHOOK =====
 
   app.post("/api/webhooks/stripe", handleStripeWebhook);
+
+  // Authorize.net: the hosted payment page needs a form POST carrying a token,
+  // so checkout's redirectUrl points here and this page submits it.
+  app.get("/pay/:reference", renderAuthnetPayPage);
+  app.post("/api/webhooks/authorizenet", handleAuthnetWebhook);
 
   // ===== PAYPAL CAPTURE =====
 
@@ -7853,7 +7915,10 @@ export async function registerRoutes(
       if (!tenant) return res.status(404).json({ message: "School not found" });
       const settings = await storage.getTenantPaymentSettings(tenant.id);
       const methods: string[] = [];
-      if (settings?.stripeEnabled && settings?.stripeSecretKey) methods.push("STRIPE");
+      // One card processor at a time: the school's choice (Settings → Payments),
+      // falling back to whichever is configured. Switching back is the rollback.
+      const card = preferredCardProvider(settings);
+      if (card) methods.push(card);
       if (settings?.paypalEnabled && settings?.paypalClientId && settings?.paypalClientSecret) methods.push("PAYPAL");
       if (settings?.cashEnabled) methods.push("CASH");
       res.json({

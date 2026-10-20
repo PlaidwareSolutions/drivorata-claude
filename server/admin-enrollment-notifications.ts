@@ -426,7 +426,7 @@ export async function notifyAbandonedCheckouts(tenantId: number, olderThanHours:
   const now = Date.now();
   const candidates = await db.select().from(payments).where(and(
     eq(payments.tenantId, tenantId),
-    inArray(payments.provider, ["STRIPE", "PAYPAL"]),
+    inArray(payments.provider, ["STRIPE", "PAYPAL", "AUTHORIZE_NET"]),
     inArray(payments.status, ["CREATED", "PENDING", "EXPIRED", "FAILED"]),
     lt(payments.createdAt, new Date(now - olderThanHours * 3600_000)),
     gt(payments.createdAt, new Date(now - 48 * 3600_000)),

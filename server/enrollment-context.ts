@@ -102,7 +102,7 @@ export function locationLine(location: Location | null): string {
 }
 
 export function paymentMethodLabel(provider: string | null | undefined): string {
-  if (provider === "STRIPE") return "credit/debit card";
+  if (provider === "STRIPE" || provider === "AUTHORIZE_NET") return "credit/debit card";
   if (provider === "PAYPAL") return "PayPal";
   if (provider === "CASH") return "cash";
   return "—";

@@ -1,17 +1,17 @@
 // Per-tenant processing surcharge (labelled "service fee" to the buyer).
 // Stored as basis points so all math stays in integers — 300 = 3.00%.
 //
-// Apply ONLY to STRIPE / PAYPAL provider charges. CASH and EXTERNAL payment
+// Apply ONLY to card / PayPal provider charges (STRIPE, PAYPAL, AUTHORIZE_NET). CASH and EXTERNAL payment
 // flows never carry the fee — the tenant collects those off-platform.
 
-export const SERVICE_FEE_PROVIDERS = ["STRIPE", "PAYPAL"] as const;
+export const SERVICE_FEE_PROVIDERS = ["STRIPE", "PAYPAL", "AUTHORIZE_NET"] as const;
 export type ServiceFeeProvider = (typeof SERVICE_FEE_PROVIDERS)[number];
 
 export const MAX_SERVICE_FEE_BPS = 1000; // 10.00% hard cap
 export const MAX_SERVICE_FEE_FLAT_CENTS = 10000; // $100.00 hard cap on the flat admin fee
 
 export function isServiceFeeProvider(provider: string | null | undefined): provider is ServiceFeeProvider {
-  return provider === "STRIPE" || provider === "PAYPAL";
+  return provider === "STRIPE" || provider === "PAYPAL" || provider === "AUTHORIZE_NET";
 }
 
 /**

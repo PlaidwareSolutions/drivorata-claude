@@ -36,6 +36,13 @@
       "when": 1792386657901,
       "tag": "0004_email_tracking",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792455657209,
+      "tag": "0005_authorize_net",
+      "breakpoints": true
     }
   ]
 }

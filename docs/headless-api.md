@@ -544,10 +544,18 @@ breakdown *before* they hit the checkout button.
 }
 ```
 
+**Card payments:** `methods` contains at most one card processor — `STRIPE`
+or `AUTHORIZE_NET` (Authorize.net / Chase), whichever the school has chosen.
+Show either as "Credit/Debit card" and send that value as `provider` at
+checkout. The flow is identical: checkout start returns `redirectUrl`; for
+Authorize.net it points at `https://drivorata.com/pay/<reference>`, a page
+that forwards the buyer to Authorize.net's secure payment form. The buyer
+returns to your success URL (with `&ref=`) and §3.11 reports the outcome.
+
 #### Fee model
 
 The tenant can configure two independent, additive fee components, and
-**both apply only to STRIPE and PAYPAL** (CASH and external/headless
+**both apply only to card and PayPal payments (STRIPE, AUTHORIZE_NET, PAYPAL)** (CASH and external/headless
 redirect flows never carry them):
 
 | Field | Unit | Range | Meaning |

@@ -147,6 +147,7 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { generateReference } from "./payments/checkout-reference";
+import { PAYMENT_SECRET_COLUMNS, decryptSecret, encryptSecret, isEncrypted, mapSecrets, secretsKeyConfigured } from "./lib/secrets";
 import { eq, and, or, ilike, inArray, isNotNull, isNull, sql, desc, lt, count, type SQL } from "drizzle-orm";
 import {
   CartCheckoutError,
@@ -366,6 +367,7 @@ export interface IStorage {
   getExpiredPendingEnrollmentsByTenant(tenantId: number, olderThanHours: number): Promise<Enrollment[]>;
   expireEnrollment(enrollmentId: number, tenantId: number): Promise<void>;
   getAllTenantPaymentSettings(): Promise<TenantPaymentSettings[]>;
+  encryptLegacyPaymentSecrets(tenantId?: number): Promise<number>;
   countPendingPaymentEnrollments(tenantId: number, olderThanHours: number): Promise<number>;
   createUserByEmail(email: string, name: string, phone?: string | null): Promise<User>;
 
@@ -2953,26 +2955,44 @@ export class DatabaseStorage implements IStorage {
     return Number(row?.count ?? 0) > 0;
   }
 
+  // Processor credentials are encrypted at rest (server/lib/secrets.ts):
+  // encrypted on write here, decrypted on read, so callers see plain values.
   async getTenantPaymentSettings(tenantId: number): Promise<TenantPaymentSettings | undefined> {
     const [settings] = await db
       .select()
       .from(tenantPaymentSettings)
       .where(eq(tenantPaymentSettings.tenantId, tenantId));
-    return settings;
+    return settings ? mapSecrets(settings, decryptSecret) : settings;
   }
 
   async upsertTenantPaymentSettings(data: InsertTenantPaymentSettings): Promise<TenantPaymentSettings> {
     const existing = await this.getTenantPaymentSettings(data.tenantId);
+    const stored = mapSecrets(data, encryptSecret);
     if (existing) {
       const [updated] = await db
         .update(tenantPaymentSettings)
-        .set({ ...data, updatedAt: new Date() })
+        .set({ ...stored, updatedAt: new Date() })
         .where(eq(tenantPaymentSettings.id, existing.id))
         .returning();
-      return updated;
+      return mapSecrets(updated, decryptSecret);
     }
-    const [created] = await db.insert(tenantPaymentSettings).values(data).returning();
-    return created;
+    const [created] = await db.insert(tenantPaymentSettings).values(stored).returning();
+    return mapSecrets(created, decryptSecret);
+  }
+
+  /** Encrypts any processor credentials still stored as plain text. Idempotent. */
+  async encryptLegacyPaymentSecrets(tenantId?: number): Promise<number> {
+    if (!secretsKeyConfigured()) return 0;
+    const rows = tenantId != null
+      ? await db.select().from(tenantPaymentSettings).where(eq(tenantPaymentSettings.tenantId, tenantId))
+      : await db.select().from(tenantPaymentSettings);
+    let n = 0;
+    for (const row of rows) {
+      if (!PAYMENT_SECRET_COLUMNS.some((c) => row[c] && !isEncrypted(row[c]))) continue;
+      await db.update(tenantPaymentSettings).set(mapSecrets(row, encryptSecret)).where(eq(tenantPaymentSettings.id, row.id));
+      n++;
+    }
+    return n;
   }
 
   async getEmailTemplate(tenantId: number, templateKey: string): Promise<TenantEmailTemplate | undefined> {
@@ -3046,7 +3066,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAllTenantPaymentSettings(): Promise<TenantPaymentSettings[]> {
-    return db.select().from(tenantPaymentSettings);
+    return (await db.select().from(tenantPaymentSettings)).map((r) => mapSecrets(r, decryptSecret));
   }
 
   async countPendingPaymentEnrollments(tenantId: number, olderThanHours: number): Promise<number> {

@@ -46,6 +46,7 @@ import { useLocationFilter } from "@/lib/location-filter-context";
 import { LocationFilterIndicator } from "@/components/admin/location-filter-indicator";
 import { UnconfirmedCardPaymentsPanel, useUnconfirmedCardPayments } from "@/components/admin/unconfirmed-card-payments";
 import { EnrollmentEmailActivity, type EnrollmentEmail } from "@/components/admin/enrollment-email-activity";
+import { EnrollmentRefundButton } from "@/components/admin/enrollment-refund";
 
 type Enrollment = {
   id: number;
@@ -2568,6 +2569,18 @@ function PurchaseDetailsDialog({
         })()}
 
         <DialogFooter>
+          {tenantId && enrollment?.id && data && (() => {
+            const paid = data.payments.find((p) => p.status === "COMPLETED") ?? null;
+            return (
+              <EnrollmentRefundButton
+                tenantId={tenantId}
+                enrollmentId={enrollment.id}
+                enrollmentStatus={data.enrollment.status}
+                payment={paid ? { provider: paid.provider, status: paid.status, amountCents: paid.amountCents } : null}
+                onDone={() => queryClient.invalidateQueries({ queryKey: ["/api/tenants", tenantId, "enrollments", enrollment.id, "details"] })}
+              />
+            );
+          })()}
           <Button
             variant="outline"
             onClick={async () => {

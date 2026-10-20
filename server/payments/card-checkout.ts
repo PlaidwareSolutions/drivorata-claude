@@ -51,6 +51,17 @@ export interface CardCheckoutResult {
 
 export const AUTHNET_TOKEN_TTL_MS = 14 * 60_000; // Authorize.net: 15 minutes
 
+/**
+ * The return/cancel URLs handed to Authorize.net. Its hosted form renders
+ * BLANK when the return URL contains "&" (reproduced in the sandbox, Oct
+ * 2026), and storefront URLs always do (?cart=…&ref=…). So Authorize.net only
+ * ever sees these plain backend URLs, which redirect to the real ones.
+ */
+export function authnetHostedUrls(reference: string): { returnUrl: string; cancelUrl: string } {
+  const base = `${platformBaseUrl()}/pay/${encodeURIComponent(reference)}`;
+  return { returnUrl: `${base}/return`, cancelUrl: `${base}/cancel` };
+}
+
 export async function startCardCheckout(
   provider: CardProvider,
   settings: TenantPaymentSettings,
@@ -76,8 +87,7 @@ export async function startCardCheckout(
       invoiceNumber: payment.reference,
       description: input.description,
       customerEmail: input.customerEmail,
-      returnUrl: input.successUrl,
-      cancelUrl: input.cancelUrl,
+      ...authnetHostedUrls(payment.reference),
     }),
     tokenIssuedAt: new Date().toISOString(),
   };

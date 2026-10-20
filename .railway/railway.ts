@@ -62,6 +62,7 @@ export default defineRailway(() => {
       UNSUBSCRIBE_SECRET: secret("Copy from Replit"),
       RESEND_API_KEY: secret("Resend API key"),
       RESEND_WEBHOOK_SECRET: secret("Resend webhook signing secret"),
+      PAYMENT_SECRETS_KEY: secret("Encrypts payment processor keys at rest — openssl rand -base64 32"),
       INBOUND_WEBHOOK_SECRET: secret("Resend inbound webhook secret"),
       // Intentionally optional: when unset, buildReplyToAddress() derives the domain
       // from SESSION_EMAIL_FROM (contact.plaidware.com), which is what production does.

@@ -125,6 +125,27 @@ export function __resetRetrieveStripeCheckoutSessionForTests(): void {
   retrieveStripeCheckoutSessionImpl = realRetrieveStripeCheckoutSession;
 }
 
+async function realRefundStripePayment(secretKey: string, paymentIntentId: string, amountCents?: number): Promise<string> {
+  const stripe = new Stripe(secretKey, { apiVersion: "2025-01-27.acacia" as any });
+  const refund = await stripe.refunds.create({ payment_intent: paymentIntentId, ...(amountCents ? { amount: amountCents } : {}) });
+  return refund.id;
+}
+
+let refundStripePaymentImpl = realRefundStripePayment;
+
+/** Refunds a Stripe payment (in full, or `amountCents` of it); returns the refund id. */
+export async function refundStripePayment(secretKey: string, paymentIntentId: string, amountCents?: number): Promise<string> {
+  return refundStripePaymentImpl(secretKey, paymentIntentId, amountCents);
+}
+
+export function __setRefundStripePaymentForTests(fn: typeof realRefundStripePayment): void {
+  refundStripePaymentImpl = fn;
+}
+
+export function __resetRefundStripePaymentForTests(): void {
+  refundStripePaymentImpl = realRefundStripePayment;
+}
+
 export async function verifyStripeWebhook(
   payload: string | Buffer,
   signature: string,

@@ -41,6 +41,7 @@ Railway pre-deploy: node dist/migrate.cjs
 | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `PORTAL_CNAME_TARGET` | from §2.3 (`saas.drivorata.com`) |
 | `PORTAL_PROXY_SECRET` | random string; also `wrangler secret put` on the Worker |
 | `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET`, `INBOUND_WEBHOOK_SECRET`, `INBOUND_REPLY_DOMAIN`, `SESSION_EMAIL_FROM` | carry over |
+| `PAYMENT_SECRETS_KEY` | 32 random bytes (`openssl rand -base64 32`); encrypts Stripe / PayPal / Authorize.net keys at rest. Plain-text rows are encrypted on boot. Losing it = re-enter processor keys in Admin → Payment Settings. |
 | `BACKGROUND_JOBS_ENABLED`, `STALE_CREDIT_REMINDER_INTERVAL_MINUTES`, `CART_REMINDER_INTERVAL_MINUTES` | optional (defaults on / 60 / 60) |
 | `BOOT_SEED_TENANT_IDS` | optional, e.g. `1,28` to re-run the idempotent promotion/online-course seeds at boot |
 | `LOGO_FETCH_ALLOWED_HOSTS` | optional extra hosts allowed for pasted logo URLs in PDFs |

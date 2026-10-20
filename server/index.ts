@@ -6,6 +6,7 @@ import cors from "cors";
 import { seedPromotions } from "./seed-promotions";
 import { seedOnlineCourses } from "./seed-online-courses";
 import { storage } from "./storage";
+import { secretsKeyConfigured } from "./lib/secrets";
 import { pool } from "./db";
 import { startBackgroundJobs, stopBackgroundJobs } from "./jobs/scheduler";
 
@@ -99,6 +100,14 @@ function bootSeedTenantIds(): number[] {
 
 (async () => {
   await registerRoutes(httpServer, app);
+  // Payment processor keys are encrypted at rest; upgrade any plain-text rows.
+  if (!secretsKeyConfigured()) {
+    console.warn("[Secrets] PAYMENT_SECRETS_KEY is not set — payment processor keys are stored unencrypted");
+  } else {
+    storage.encryptLegacyPaymentSecrets()
+      .then((n) => n > 0 && console.log(`[Secrets] encrypted payment credentials for ${n} school(s)`))
+      .catch((err) => console.error("[Secrets] encrypting legacy payment credentials failed:", err));
+  }
   startBackgroundJobs();
   for (const tenantId of bootSeedTenantIds()) {
     seedPromotions(tenantId).catch((err) => console.error(`Failed to seed promotions for tenant ${tenantId}:`, err));

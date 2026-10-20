@@ -74,6 +74,7 @@ import { getCheckoutStatus } from "./payments/checkout-status";
 import { cardProviderReady, preferredCardProvider, startCardCheckout } from "./payments/card-checkout";
 import { authnetMode, testAuthnetConnection } from "./payments/authorizenet-adapter";
 import { handleAuthnetWebhook, redirectAuthnetReturn, renderAuthnetPayPage } from "./payments/authorizenet-checkout";
+import { RefundError, refundEnrollment } from "./payments/refund";
 import { handleInboundEmailWebhook } from "./inbound-email-webhook";
 import { activateEnrollment, activateCart, confirmEnrollmentManually } from "./payments/activation-service";
 import { sendEnrollmentReceived, sendEnrollmentReceivedForCart, sendPaymentReceived, fireAndForget, TEMPLATE_DEFS, type EnrollmentEmailKey } from "./enrollment-emails";
@@ -7186,6 +7187,9 @@ export async function registerRoutes(
     }
   });
 
+  // Refund an enrollment: money back through Stripe / Authorize.net first
+  // (void if unsettled, refund if settled), then the records. `recordOnly`
+  // = money was already returned outside Drivorata.
   app.post("/api/tenants/:tenantId/enrollments/:id/refund", isAuthenticated, async (req: any, res) => {
     try {
       const tenantId = parseInt(req.params.tenantId);
@@ -7194,48 +7198,15 @@ export async function registerRoutes(
       if (!member || !["tenant_admin", "platform_admin"].includes(member.role)) {
         return res.status(403).json({ message: "Forbidden" });
       }
-
-      const enrollment = await storage.getEnrollmentById(enrollmentId, tenantId);
-      if (!enrollment) return res.status(404).json({ message: "Enrollment not found" });
-
-      await storage.updateEnrollment(enrollmentId, tenantId, { status: "refunded" } as any);
-
-      const paymentsList = await storage.getPaymentsByEnrollment(enrollmentId);
-      for (const p of paymentsList) {
-        if (p.status === "COMPLETED") {
-          await storage.updatePayment(p.id, { status: "REFUNDED" } as any);
-        }
-      }
-
-      const credits = await storage.getCreditsByEnrollment(enrollmentId);
-      const reversals: any[] = [];
-      for (const c of credits) {
-        if (c.reason === "PACKAGE_GRANT" && c.delta > 0) {
-          reversals.push({
-            tenantId,
-            enrollmentId,
-            type: c.type,
-            delta: -c.delta,
-            reason: "REFUND_REVERSAL" as const,
-            refId: `refund-${enrollmentId}`,
-          });
-        }
-      }
-      if (reversals.length > 0) {
-        await storage.createCreditLedgerEntries(reversals);
-      }
-
-      await storage.createAuditEvent({
+      const result = await refundEnrollment({
         tenantId,
+        enrollmentId,
         actorUserId: req.user.claims.sub,
-        action: "ENROLLMENT_REFUNDED",
-        targetType: "ENROLLMENT",
-        targetId: enrollmentId,
-        details: { reason: req.body.reason || "Admin refund" },
+        recordOnly: req.body?.recordOnly === true,
       });
-
-      res.json({ success: true });
+      res.json({ success: true, ...result });
     } catch (error) {
+      if (error instanceof RefundError) return res.status(error.status).json({ message: error.message });
       console.error("Refund error:", error);
       res.status(500).json({ message: "Failed to process refund" });
     }

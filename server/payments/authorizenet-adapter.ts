@@ -135,6 +135,12 @@ export interface AuthnetTransaction {
   submittedAt: Date | null;
   /** Money is captured: approved and either settled or awaiting the nightly batch. */
   paid: boolean;
+  cardLast4: string | null;
+}
+
+/** Unsettled (still in today's batch) → void; settled → refund. */
+export function isSettled(t: AuthnetTransaction): boolean {
+  return t.status === "settledSuccessfully";
 }
 
 // Statuses where the charge went through. capturedPendingSettlement is the
@@ -144,7 +150,9 @@ const PAID_STATUSES = new Set(["capturedPendingSettlement", "settledSuccessfully
 
 function toTransaction(t: any): AuthnetTransaction {
   const amount = Number(t.authAmount ?? t.settleAmount ?? 0);
+  const card = String(t.payment?.creditCard?.cardNumber ?? t.accountNumber ?? "");
   return {
+    cardLast4: /\d{4}$/.test(card) ? card.slice(-4) : null,
     transId: String(t.transId),
     status: String(t.transactionStatus ?? ""),
     invoiceNumber: t.order?.invoiceNumber ?? t.invoiceNumber ?? null,
@@ -197,6 +205,39 @@ export async function findTransactionByInvoice(
     }
   }
   return matches.find((m) => m.paid) ?? matches[0] ?? null;
+}
+
+async function transaction(creds: AuthnetCredentials, transactionRequest: Record<string, unknown>): Promise<string> {
+  const out = await apiCall(creds.mode, {
+    createTransactionRequest: {
+      merchantAuthentication: { name: creds.apiLoginId, transactionKey: creds.transactionKey },
+      transactionRequest,
+    },
+  });
+  const tr = out?.transactionResponse;
+  if (out?.messages?.resultCode !== "Ok" || String(tr?.responseCode) !== "1") {
+    const e = tr?.errors?.[0] ?? out?.messages?.message?.[0];
+    throw new AuthnetError(e ? `${e.errorCode ?? e.code}: ${e.errorText ?? e.text}` : "Authorize.net declined the request", e?.errorCode ?? e?.code);
+  }
+  return String(tr.transId);
+}
+
+/** Cancels an unsettled transaction in full (nothing reaches the card). */
+export async function voidTransaction(creds: AuthnetCredentials, transId: string): Promise<string> {
+  return transaction(creds, { transactionType: "voidTransaction", refTransId: transId });
+}
+
+/** Credits a settled transaction (up to its amount, within 180 days). */
+export async function refundTransaction(
+  creds: AuthnetCredentials,
+  input: { transId: string; amountCents: number; cardLast4: string },
+): Promise<string> {
+  return transaction(creds, {
+    transactionType: "refundTransaction",
+    amount: (input.amountCents / 100).toFixed(2),
+    payment: { creditCard: { cardNumber: input.cardLast4, expirationDate: "XXXX" } },
+    refTransId: input.transId,
+  });
 }
 
 /**

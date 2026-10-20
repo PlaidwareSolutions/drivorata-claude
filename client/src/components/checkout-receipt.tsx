@@ -34,7 +34,7 @@ type ReceiptData = {
   items: LineItem[];
   totals: { subtotalCents: number; serviceFeeCents?: number; totalCents: number; currency: string };
   payment: {
-    provider: "STRIPE" | "PAYPAL" | "CASH";
+    provider: "STRIPE" | "PAYPAL" | "CASH" | "AUTHORIZE_NET";
     status: string;
     amountCents: number;
     currency: string;
@@ -87,7 +87,7 @@ function fmtBirthday(d?: string) {
 
 function providerLabel(provider?: string) {
   if (!provider) return "Payment";
-  if (provider === "STRIPE") return "Credit Card";
+  if (provider === "STRIPE" || provider === "AUTHORIZE_NET") return "Credit Card";
   if (provider === "PAYPAL") return "PayPal";
   if (provider === "CASH") return "Cash";
   return provider;

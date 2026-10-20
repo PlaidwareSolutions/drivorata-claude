@@ -589,6 +589,7 @@ export const paymentProviderEnum = pgEnum("payment_provider", [
   "STRIPE",
   "PAYPAL",
   "CASH",
+  "AUTHORIZE_NET",
 ]);
 
 export const paymentStatusEnum = pgEnum("payment_status", [
@@ -722,6 +723,16 @@ export const tenantPaymentSettings = pgTable("tenant_payment_settings", {
   // or used in place of `serviceFeeBps`. Default 0 = no flat fee. Capped to
   // MAX_SERVICE_FEE_FLAT_CENTS (10000 = $100) at the API layer.
   serviceFeeFlatCents: integer("service_fee_flat_cents").notNull().default(0),
+  // Authorize.net (the gateway for Chase merchant accounts), via its hosted
+  // payment page. The Signature Key verifies Authorize.net's webhooks.
+  authnetEnabled: boolean("authnet_enabled").default(false),
+  authnetApiLoginId: varchar("authnet_api_login_id"),
+  authnetTransactionKey: varchar("authnet_transaction_key"),
+  authnetSignatureKey: varchar("authnet_signature_key"),
+  authnetMode: varchar("authnet_mode").default("sandbox"),
+  // Which processor takes card payments on the storefront when more than one
+  // is configured: STRIPE | AUTHORIZE_NET. Switching back is the rollback.
+  cardProvider: varchar("card_provider").default("STRIPE"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

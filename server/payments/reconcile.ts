@@ -1,4 +1,4 @@
-import { and, eq, gt, inArray, isNotNull, lt } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull, lt, or } from "drizzle-orm";
 import { db } from "../db";
 import { payments, type Payment } from "@shared/schema";
 import { checkProviderPayment, type ProviderCheck } from "./payment-recovery";
@@ -34,9 +34,11 @@ export async function reconcilePayment(payment: Payment): Promise<{ check: Provi
 
 export async function reconcilePendingCardPayments(now = Date.now()): Promise<ReconcileSummary> {
   const candidates = await db.select().from(payments).where(and(
-    eq(payments.provider, "STRIPE"),
+    or(
+      and(eq(payments.provider, "STRIPE"), isNotNull(payments.providerOrderId)),
+      and(eq(payments.provider, "AUTHORIZE_NET"), isNotNull(payments.reference)),
+    ),
     inArray(payments.status, ["PENDING", "EXPIRED"]),
-    isNotNull(payments.providerOrderId),
     lt(payments.createdAt, new Date(now - MIN_AGE_MS)),
     gt(payments.createdAt, new Date(now - MAX_AGE_MS)),
   ));

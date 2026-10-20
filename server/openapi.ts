@@ -706,7 +706,7 @@ export const openApiSpec = {
         description: "Headless one-shot variant of /cart-checkout/start. Server creates a cart, populates it from the items array (each {packageId, offeringId?}), then starts the single-payment checkout. Returns the same response shape as /cart-checkout/start (redirectUrl for STRIPE/PAYPAL, cashPayment+cartId+paymentId for CASH). Use externalSuccessUrl/externalCancelUrl to route the buyer back to your embedded site.",
         parameters: [{ name: "slug", in: "path", required: true, schema: { type: "string" } }],
         requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["provider", "student", "items"], properties: {
-          provider: { type: "string", enum: ["STRIPE", "PAYPAL", "CASH"] },
+          provider: { type: "string", enum: ["STRIPE", "PAYPAL", "CASH", "AUTHORIZE_NET"] },
           items: { type: "array", minItems: 1, items: { type: "object", required: ["packageId"], properties: {
             packageId: { type: "integer" },
             offeringId: { type: "integer", nullable: true, description: "Required when the package has an IN_CLASS component." },
@@ -735,7 +735,7 @@ export const openApiSpec = {
         description: "Creates one enrollment per cart item (linked by cartId) and a single payment for the full cart total. On capture/webhook, every enrollment is activated; for items with an offeringId the student is auto-booked into all sessions atomically, falling back to the offering waitlist if any session is full. Use externalSuccessUrl and externalCancelUrl to redirect students back to your embedded site after payment; the cart UUID is appended as ?cart=<id>.",
         parameters: [{ name: "slug", in: "path", required: true, schema: { type: "string" } }],
         requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["provider", "cartId", "student"], properties: {
-          provider: { type: "string", enum: ["STRIPE", "PAYPAL", "CASH"] },
+          provider: { type: "string", enum: ["STRIPE", "PAYPAL", "CASH", "AUTHORIZE_NET"] },
           cartId: { type: "string" },
           student: { type: "object", required: ["firstName", "lastName", "email"], properties: {
             firstName: { type: "string" }, lastName: { type: "string" }, email: { type: "string" }, phone: { type: "string" }, dateOfBirth: { type: "string" },
@@ -836,7 +836,7 @@ export const openApiSpec = {
                       type: "object",
                       nullable: true,
                       properties: {
-                        provider: { type: "string", enum: ["STRIPE", "PAYPAL", "CASH"] },
+                        provider: { type: "string", enum: ["STRIPE", "PAYPAL", "CASH", "AUTHORIZE_NET"] },
                         status: { type: "string", enum: ["CREATED", "PENDING", "COMPLETED", "FAILED", "REFUNDED"] },
                         amountCents: { type: "integer", example: 29900 },
                         currency: { type: "string", example: "USD" },
@@ -1381,7 +1381,7 @@ export const openApiSpec = {
             type: "object",
             nullable: true,
             properties: {
-              provider: { type: "string", enum: ["STRIPE", "PAYPAL", "CASH"] },
+              provider: { type: "string", enum: ["STRIPE", "PAYPAL", "CASH", "AUTHORIZE_NET"] },
               status: { type: "string", enum: ["CREATED", "PENDING", "SUCCEEDED", "COMPLETED", "FAILED", "REFUNDED"] },
               amountCents: { type: "integer" },
               currency: { type: "string", example: "USD" },
@@ -1565,7 +1565,7 @@ export const openApiSpec = {
         type: "object",
         required: ["provider", "packageId", "student"],
         properties: {
-          provider: { type: "string", enum: ["STRIPE", "PAYPAL", "CASH"], description: "Payment provider to use" },
+          provider: { type: "string", enum: ["STRIPE", "PAYPAL", "CASH", "AUTHORIZE_NET"], description: "Payment provider to use" },
           packageId: { type: "integer", description: "ID of the package to enroll in", example: 1 },
           locationId: { type: "integer", nullable: true, description: "Preferred location ID (optional)", example: 1 },
           student: {
@@ -1609,7 +1609,7 @@ export const openApiSpec = {
         type: "object",
         required: ["provider", "onlineCourseId", "student"],
         properties: {
-          provider: { type: "string", enum: ["STRIPE", "PAYPAL", "CASH"], description: "Payment provider to use" },
+          provider: { type: "string", enum: ["STRIPE", "PAYPAL", "CASH", "AUTHORIZE_NET"], description: "Payment provider to use" },
           onlineCourseId: { type: "integer", description: "ID of the online course to purchase", example: 1 },
           locationId: {
             type: "integer",

@@ -55,7 +55,8 @@ export async function getCheckoutStatus(tenantId: number, reference: string): Pr
   let payment = await findByReference(tenantId, reference.trim().toUpperCase());
   if (!payment) return null;
 
-  if (payment.provider === "STRIPE" && payment.status === "PENDING" && payment.providerOrderId) {
+  const checkable = (payment.provider === "STRIPE" && payment.providerOrderId) || payment.provider === "AUTHORIZE_NET";
+  if (checkable && payment.status === "PENDING") {
     const last = (payment.metadataJson as any)?.providerCheck?.checkedAt;
     if (!last || Date.now() - new Date(last).getTime() > LIVE_CHECK_EVERY_MS) {
       try {

@@ -37,7 +37,7 @@ T plan Phase 0 and Phase 1 (1a–1d) are done in B, with these differences — T
 | C1 | `GET /api/public/tenant/:slug/class-schedule?locationId&packageId&audience&from&to` — rows below; `headless-api.md` §3.10 | **live** | schedule page, home "next classes" |
 | C2 | `GET /api/public/tenant/:slug/checkout/:reference/status` → `{ reference, state: paid \| pending \| cash_due \| not_completed \| refunded, provider, amountCents, currency, paidAt, items:[{name, className, startsAt, locationName, locationPhone}], enrollments:[{id,status}] }`; asks Stripe itself while pending; §3.11 | **live** | thank-you page polling (`ref` from success URL) |
 | C3 | `locations[].phone` populated | **done** | header/footer/contact/schedule |
-| C4 | `AUTHORIZE_NET` in `/payment-methods`; same `redirectUrl` contract (B-hosted auto-submit page) | after sandbox | card option label only |
+| C4 | `AUTHORIZE_NET` in `/payment-methods` (one card processor at a time, the school's choice); same `redirectUrl` contract (B-hosted `/pay/<reference>` page); §3.9 | **built, PR open** | show it as "Credit/Debit card"; send `provider: "AUTHORIZE_NET"` |
 | C5 | No pre-payment card emails; status-prefixed owner subjects | **done** | thank-you copy |
 | C6 | Checkout bodies accept `utm_source`, `utm_medium`, `utm_campaign`, `gclid` (stored, shown in Payments/CSV); §3.12 | **live** | capture from landing URL, send at checkout |
 
@@ -82,7 +82,7 @@ comes before the schedule work, and it also fixes `www`.
 | **1 — done** | — | Build **C1, C2, C6** + `headless-api.md`; deploy to `drivorata.com` | See "T — Wave 1 instructions" below | Approve a storefront cutover window (GoDaddy NS → Cloudflare); owner: start Authorize.net sandbox; owner: keep recovering payments |
 | **2 — storefront cutover: done** | ✔ | Watch backend logs/API errors from the new storefront | Run its runbook: NS flip, apex + `www` CNAMEs, content-type checks, mail test; keep Replit stopped-not-deleted | Do the GoDaddy NS change (needs your login) |
 | **3 — schedule & thank-you: done** | ✔ | Support; adjust C1 fields on request | `/schedule` table + filters, Enroll Now deep link, "You're enrolling in" card, thank-you polls C2, home "next classes", nav CTA | Owner: fill in each class's description ("details") in admin |
-| **4 — Authorize.net** | Sandbox credentials exist | Provider interface; `AUTHORIZE_NET` adapter (Accept Hosted, `invoiceNumber = reference`), webhook + reconcile, encrypted keys, void/refund | Card label/icon for `AUTHORIZE_NET`; no flow change | Owner: production API Login ID / Transaction Key / Signature Key (no owner login); confirm with Chase nothing else uses the current key |
+| **4 — Authorize.net (in progress)** | Sandbox credentials exist ✔ (2026-10-20) | Provider interface; `AUTHORIZE_NET` adapter (Accept Hosted, `invoiceNumber = reference`), webhook + reconcile, encrypted keys, void/refund | Card label/icon for `AUTHORIZE_NET`; no flow change | Owner: production API Login ID / Transaction Key / Signature Key (no owner login); confirm with Chase nothing else uses the current key |
 | **5 — Stripe off** | 3–5 clean days on Authorize.net | Disable Stripe for the tenant (instant rollback) | Remove Stripe-only bits | Owner OK |
 | **6 — traffic (now)** | Wave 3 live ✔ | — (C6 already records campaigns) | GA4 + Google Ads conversion (`purchase` only when C2 says `paid`), titles/meta, JSON-LD per location, sitemap/robots | Owner: 3 Google Business Profiles with the right phones; Search Console; ads |
 

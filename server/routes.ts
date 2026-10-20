@@ -73,7 +73,7 @@ import { buildClassSchedule } from "./class-schedule";
 import { getCheckoutStatus } from "./payments/checkout-status";
 import { cardProviderReady, preferredCardProvider, startCardCheckout } from "./payments/card-checkout";
 import { authnetMode, testAuthnetConnection } from "./payments/authorizenet-adapter";
-import { handleAuthnetWebhook, renderAuthnetPayPage } from "./payments/authorizenet-checkout";
+import { handleAuthnetWebhook, redirectAuthnetReturn, renderAuthnetPayPage } from "./payments/authorizenet-checkout";
 import { handleInboundEmailWebhook } from "./inbound-email-webhook";
 import { activateEnrollment, activateCart, confirmEnrollmentManually } from "./payments/activation-service";
 import { sendEnrollmentReceived, sendEnrollmentReceivedForCart, sendPaymentReceived, fireAndForget, TEMPLATE_DEFS, type EnrollmentEmailKey } from "./enrollment-emails";
@@ -6668,6 +6668,8 @@ export async function registerRoutes(
   // Authorize.net: the hosted payment page needs a form POST carrying a token,
   // so checkout's redirectUrl points here and this page submits it.
   app.get("/pay/:reference", renderAuthnetPayPage);
+  app.get("/pay/:reference/return", redirectAuthnetReturn);
+  app.get("/pay/:reference/cancel", redirectAuthnetReturn);
   app.post("/api/webhooks/authorizenet", handleAuthnetWebhook);
 
   // ===== PAYPAL CAPTURE =====

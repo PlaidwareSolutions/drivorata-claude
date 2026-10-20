@@ -10,7 +10,7 @@ import {
   verifyAuthnetSignature,
   type AuthnetTransaction,
 } from "./authorizenet-adapter";
-import { AUTHNET_TOKEN_TTL_MS, authnetCredentials } from "./card-checkout";
+import { AUTHNET_TOKEN_TTL_MS, authnetCredentials, authnetHostedUrls } from "./card-checkout";
 import { completeProviderPayment } from "./complete-payment";
 
 // The two Authorize.net endpoints: the page that hands the customer to the
@@ -69,8 +69,7 @@ export async function renderAuthnetPayPage(req: Request, res: Response) {
         invoiceNumber: reference,
         description: meta.description,
         customerEmail: meta.customerEmail,
-        returnUrl: meta.returnUrl,
-        cancelUrl: meta.cancelUrl,
+        ...authnetHostedUrls(reference),
       });
       await storage.updatePayment(payment.id, {
         metadataJson: { ...((payment.metadataJson as any) || {}), authnet: { ...meta, token, tokenIssuedAt: new Date().toISOString() } },
@@ -88,6 +87,21 @@ export async function renderAuthnetPayPage(req: Request, res: Response) {
     console.error("[AuthnetPay] failed:", err instanceof Error ? err.message : err);
     res.status(502).type("html").send(page("Payment unavailable", `<h1>Payment is temporarily unavailable</h1><p>No payment was taken. Please try again in a few minutes, or call the school.</p>`));
   }
+}
+
+/**
+ * GET /pay/:reference/return and /pay/:reference/cancel — where Authorize.net
+ * sends the customer back to; forwards to the storefront's own URLs.
+ */
+export async function redirectAuthnetReturn(req: Request, res: Response) {
+  res.set("Cache-Control", "no-store");
+  const reference = String(req.params.reference || "").trim().toUpperCase();
+  const payment = reference ? await paymentByReference(reference) : undefined;
+  const meta = ((payment?.metadataJson as any)?.authnet || null) as AuthnetMeta | null;
+  if (!payment || payment.provider !== "AUTHORIZE_NET" || !meta) {
+    return res.status(404).type("html").send(page("Checkout not found", `<h1>Checkout not found</h1>`));
+  }
+  return res.redirect(303, req.path.endsWith("/cancel") ? meta.cancelUrl : meta.returnUrl);
 }
 
 // Events that mean money was captured. A fraud-held payment becomes paid when

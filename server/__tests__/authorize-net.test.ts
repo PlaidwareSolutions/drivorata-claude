@@ -46,13 +46,17 @@ let n = 0;
 
 // A tiny Authorize.net: tokens on request, transactions we register.
 const calls: string[] = [];
+const hostedRequests: any[] = [];
 const transactions = new Map<string, { transId: string; transactionStatus: string; invoiceNumber: string; authAmount: number }>();
 function fakeAuthnet() {
   __setAuthnetApiForTests(async (_mode, body) => {
     const name = Object.keys(body)[0];
     calls.push(name);
     const ok = { messages: { resultCode: "Ok", message: [{ code: "I00001", text: "Successful." }] } };
-    if (name === "getHostedPaymentPageRequest") return { ...ok, token: `tok_${++n}` };
+    if (name === "getHostedPaymentPageRequest") {
+      hostedRequests.push((body as any)[name]);
+      return { ...ok, token: `tok_${++n}` };
+    }
     if (name === "getTransactionDetailsRequest") {
       const t = transactions.get((body as any)[name].transId);
       if (!t) return { messages: { resultCode: "Error", message: [{ code: "E00040", text: "The record cannot be found." }] } };
@@ -255,4 +259,20 @@ test("admin settings mask the Authorize.net keys and keep them on a masked save"
   const [row] = await db.select().from(tenantPaymentSettings).where(eq(tenantPaymentSettings.tenantId, tenantId));
   assert.equal(row.authnetTransactionKey, "key");
   assert.equal(row.authnetSignatureKey, SIG_KEY);
+});
+
+test("Authorize.net never sees a URL with '&' (its form renders blank); our return URLs forward to the storefront", async () => {
+  const c = await cartCheckout();
+  const req = hostedRequests.at(-1);
+  const ret = JSON.parse(req.hostedPaymentSettings.setting.find((x: any) => x.settingName === "hostedPaymentReturnOptions").settingValue);
+  assert.ok(!ret.url.includes("&") && !ret.cancelUrl.includes("&"));
+  assert.match(ret.url, new RegExp(`/pay/${c.reference}/return$`));
+  assert.match(ret.cancelUrl, new RegExp(`/pay/${c.reference}/cancel$`));
+
+  const back = await fetch(`${baseUrl}/pay/${c.reference}/return`, { redirect: "manual" });
+  assert.equal(back.status, 303);
+  assert.equal(back.headers.get("location"), `https://shop.example/thank-you?cart=${c.cartId}&ref=${c.reference}`);
+  const cancel = await fetch(`${baseUrl}/pay/${c.reference}/cancel`, { redirect: "manual" });
+  assert.equal(cancel.status, 303);
+  assert.equal((await fetch(`${baseUrl}/pay/ZZ-NOPE99/return`, { redirect: "manual" })).status, 404);
 });

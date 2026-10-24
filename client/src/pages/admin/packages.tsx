@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiErrorMessage, apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1223,8 +1223,12 @@ export default function PackagesPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/tenants", tenantId, "package-locations"] });
       toast({ title: "Package deleted" });
     },
-    onError: () => {
-      toast({ title: "Failed to delete package", variant: "destructive" });
+    onError: (err) => {
+      toast({
+        title: "Package not deleted",
+        description: apiErrorMessage(err, "Something went wrong. Please try again."),
+        variant: "destructive",
+      });
     },
   });
 
@@ -1634,7 +1638,7 @@ export default function PackagesPage() {
                             <AlertDialogHeader>
                               <AlertDialogTitle>Delete Package</AlertDialogTitle>
                               <AlertDialogDescription>
-                                Are you sure you want to delete "{pkg.name}"? This action cannot be undone. Any enrollments linked to this package will also be removed.
+                                Are you sure you want to delete "{pkg.name}"? This action cannot be undone. Any enrollments linked to this package will also be removed. Packages that have scheduled offerings, including past or cancelled ones, cannot be deleted. Mark those inactive instead.
                               </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>
@@ -1718,7 +1722,7 @@ export default function PackagesPage() {
                         <AlertDialogHeader>
                           <AlertDialogTitle>Delete Package</AlertDialogTitle>
                           <AlertDialogDescription>
-                            Are you sure you want to delete "{pkg.name}"? This action cannot be undone. Any enrollments linked to this package will also be removed.
+                            Are you sure you want to delete "{pkg.name}"? This action cannot be undone. Any enrollments linked to this package will also be removed. Packages that have scheduled offerings, including past or cancelled ones, cannot be deleted. Mark those inactive instead.
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>

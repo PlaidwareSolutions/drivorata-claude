@@ -2885,16 +2885,46 @@ export async function registerRoutes(
     }
   });
 
+  // Deleting a package cascades its enrollments and cart items, so it stays
+  // admin-only (office managers can create and edit, not delete).
+  // schedule_offerings.package_id is ON DELETE restrict: any offering, past or
+  // cancelled included, blocks the delete. Say so with a 409 instead of letting
+  // the FK violation surface as an unexplained 500.
   app.delete("/api/tenants/:tenantId/packages/:id", isAuthenticated, async (req: any, res) => {
     try {
       const tenantId = parseInt(req.params.tenantId);
+      const pkgId = parseInt(req.params.id);
       const member = await storage.getTenantMember(tenantId, req.user.claims.sub);
       if (!member || !["tenant_admin", "platform_admin"].includes(member.role)) {
-        return res.status(403).json({ message: "Forbidden" });
+        return res.status(403).json({ message: "Only school admins can delete packages" });
       }
-      await storage.deletePackage(parseInt(req.params.id), tenantId);
+      const existing = await storage.getPackage(pkgId);
+      if (!existing || existing.tenantId !== tenantId) {
+        return res.status(404).json({ message: "Package not found" });
+      }
+      const offeringCount = await storage.countOfferingsForPackage(tenantId, pkgId);
+      if (offeringCount > 0) {
+        return res.status(409).json({
+          code: "PACKAGE_HAS_OFFERINGS",
+          offeringCount,
+          message:
+            `"${existing.name}" has ${offeringCount} scheduled offering${offeringCount === 1 ? "" : "s"} ` +
+            "(including past or cancelled ones) and cannot be deleted. " +
+            "Mark the package inactive to hide it, or delete its offerings first.",
+        });
+      }
+      await storage.deletePackage(pkgId, tenantId);
       res.json({ message: "Package deleted" });
-    } catch (error) {
+    } catch (error: any) {
+      // An offering created between the check and the delete still trips the FK.
+      const pgCode = error?.code ?? error?.cause?.code;
+      if (pgCode === "23503") {
+        return res.status(409).json({
+          code: "PACKAGE_HAS_OFFERINGS",
+          message: "This package is still referenced by scheduled offerings and cannot be deleted. Mark it inactive instead.",
+        });
+      }
+      console.error(`Failed to delete package ${req.params.id} for tenant ${req.params.tenantId}:`, error);
       res.status(500).json({ message: "Failed to delete package" });
     }
   });

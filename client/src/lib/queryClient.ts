@@ -7,6 +7,20 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+/**
+ * Human-readable message from an error thrown by apiRequest / getQueryFn.
+ * Those throw `"<status>: <body>"`, where the body is usually `{ "message": "..." }`.
+ */
+export function apiErrorMessage(err: unknown, fallback = "Something went wrong"): string {
+  const raw = err instanceof Error ? err.message : String(err ?? "");
+  const body = raw.replace(/^\d+:\s*/, "").trim();
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed && typeof parsed.message === "string" && parsed.message) return parsed.message;
+  } catch {}
+  return body || fallback;
+}
+
 export async function apiRequest(
   method: string,
   url: string,

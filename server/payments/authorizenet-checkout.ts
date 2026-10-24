@@ -71,9 +71,7 @@ export async function renderAuthnetPayPage(req: Request, res: Response) {
         customerEmail: meta.customerEmail,
         ...authnetHostedUrls(reference),
       });
-      await storage.updatePayment(payment.id, {
-        metadataJson: { ...((payment.metadataJson as any) || {}), authnet: { ...meta, token, tokenIssuedAt: new Date().toISOString() } },
-      } as any);
+      await storage.mergePaymentMetadata(payment.id, { set: { authnet: { ...meta, token, tokenIssuedAt: new Date().toISOString() } } });
     }
 
     const action = HOSTED_PAYMENT_URL[creds.mode];

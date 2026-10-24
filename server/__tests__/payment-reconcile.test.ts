@@ -7,12 +7,14 @@ import assert from "node:assert/strict";
 import express from "express";
 import { createServer, type Server } from "http";
 import { AddressInfo } from "net";
-import { and, eq, inArray, like } from "drizzle-orm";
+import { and, eq, inArray, like, sql } from "drizzle-orm";
 
 import { registerRoutes } from "../routes";
 import { db } from "../db";
 import { reconcilePendingCardPayments } from "../payments/reconcile";
 import { completeProviderPayment } from "../payments/complete-payment";
+import { checkProviderPayment } from "../payments/payment-recovery";
+import { storage } from "../storage";
 import {
   tenants, users, tenantMembers, packages, carts, cartItems, enrollments, payments,
   sessionChangeEmails, tenantPaymentSettings,
@@ -170,4 +172,32 @@ test("webhook and job completing at once activate the payment only once", async 
   ]);
   assert.deepEqual([a.completed, b.completed].sort(), [false, true]);
   assert.equal((await emails("%payment received%", student.email)).length, 1);
+});
+
+test("a provider check from a stale row keeps markers other jobs wrote meanwhile", async () => {
+  // Oct 20 incident: the reconcile job wrote metadata read before the expiry
+  // job claimed notPaidNotifiedAt, erasing the claim — the owner then got the
+  // same NOT PAID email every hour.
+  const { payment: stale } = await checkout(20);
+  await db.update(payments)
+    .set({ metadataJson: sql`coalesce(${payments.metadataJson}, '{}'::jsonb) || '{"notPaidNotifiedAt":"2030-01-01T00:00:00Z"}'::jsonb` } as any)
+    .where(eq(payments.id, stale.id));
+
+  await checkProviderPayment(stale);
+
+  const [p] = await db.select().from(payments).where(eq(payments.id, stale.id));
+  const meta = p.metadataJson as any;
+  assert.equal(meta.notPaidNotifiedAt, "2030-01-01T00:00:00Z");
+  assert.equal(meta.providerCheck.paid, false);
+  assert.ok(Array.isArray(meta.purchase), "the checkout snapshot survives too");
+});
+
+test("metadata merge appends to arrays and applies column changes", async () => {
+  const { payment } = await checkout(20);
+  await storage.mergePaymentMetadata(payment.id, { append: { refunds: [{ n: 1 }] } });
+  const p = await storage.mergePaymentMetadata(payment.id, { set: { note: "x" }, append: { refunds: [{ n: 2 }] } }, { status: "REFUNDED" } as any);
+  assert.equal(p.status, "REFUNDED");
+  assert.deepEqual((p.metadataJson as any).refunds, [{ n: 1 }, { n: 2 }]);
+  assert.equal((p.metadataJson as any).note, "x");
+  assert.ok((p.metadataJson as any).purchase);
 });

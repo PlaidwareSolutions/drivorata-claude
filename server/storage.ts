@@ -354,6 +354,11 @@ export interface IStorage {
   getPaymentsByEnrollment(enrollmentId: number): Promise<Payment[]>;
   getPaymentsByTenant(tenantId: number, filters?: { status?: string; provider?: string }): Promise<Payment[]>;
   updatePayment(id: number, data: Partial<Payment>): Promise<Payment>;
+  mergePaymentMetadata(
+    id: number,
+    patch: { set?: Record<string, unknown>; append?: Record<string, unknown[]> },
+    data?: Partial<Payment>,
+  ): Promise<Payment>;
 
   createCreditLedgerEntry(entry: InsertCreditLedger): Promise<CreditLedgerEntry>;
   createCreditLedgerEntries(entries: InsertCreditLedger[]): Promise<CreditLedgerEntry[]>;
@@ -2928,6 +2933,30 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await db
       .update(payments)
       .set({ ...data, updatedAt: new Date() })
+      .where(eq(payments.id, id))
+      .returning();
+    return updated;
+  }
+
+  // Adds keys to metadata_json in one statement instead of rewriting the whole
+  // object from a row read earlier: a read-modify-write from a stale row used
+  // to erase keys other jobs had claimed meanwhile (notPaidNotifiedAt → the
+  // owner got the same NOT PAID email every run). `append` adds to arrays.
+  async mergePaymentMetadata(
+    id: number,
+    patch: { set?: Record<string, unknown>; append?: Record<string, unknown[]> },
+    data: Partial<Payment> = {},
+  ): Promise<Payment> {
+    let expr: SQL = sql`coalesce(${payments.metadataJson}, '{}'::jsonb)`;
+    if (patch.set && Object.keys(patch.set).length) {
+      expr = sql`${expr} || ${JSON.stringify(patch.set)}::jsonb`;
+    }
+    for (const [key, items] of Object.entries(patch.append ?? {})) {
+      expr = sql`${expr} || jsonb_build_object(${key}::text, coalesce(${payments.metadataJson} -> ${key}::text, '[]'::jsonb) || ${JSON.stringify(items)}::jsonb)`;
+    }
+    const [updated] = await db
+      .update(payments)
+      .set({ ...data, metadataJson: expr, updatedAt: new Date() } as any)
       .where(eq(payments.id, id))
       .returning();
     return updated;

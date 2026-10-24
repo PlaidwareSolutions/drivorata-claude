@@ -91,8 +91,6 @@ export async function startCardCheckout(
     }),
     tokenIssuedAt: new Date().toISOString(),
   };
-  await storage.updatePayment(payment.id, {
-    metadataJson: { ...((payment.metadataJson as Record<string, unknown>) || {}), authnet },
-  } as any);
+  await storage.mergePaymentMetadata(payment.id, { set: { authnet } });
   return { providerOrderId: null, redirectUrl: `${platformBaseUrl()}/pay/${encodeURIComponent(payment.reference)}` };
 }

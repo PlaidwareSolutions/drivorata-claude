@@ -48,16 +48,11 @@ export async function refundEnrollment(o: {
   for (const out of outcomes) {
     const p = paid.find((x) => x.id === out.paymentId)!;
     const full = out.amountCents >= p.amountCents;
-    await storage.updatePayment(p.id, {
-      ...(full ? { status: "REFUNDED" } : {}),
-      metadataJson: {
-        ...((p.metadataJson as Record<string, unknown>) || {}),
-        refunds: [
-          ...((((p.metadataJson as any)?.refunds) as unknown[]) || []),
-          { at: new Date().toISOString(), by: o.actorUserId, enrollmentId: o.enrollmentId, ...out },
-        ],
-      },
-    } as any);
+    await storage.mergePaymentMetadata(
+      p.id,
+      { append: { refunds: [{ at: new Date().toISOString(), by: o.actorUserId, enrollmentId: o.enrollmentId, ...out }] } },
+      full ? { status: "REFUNDED" } : {},
+    );
   }
 
   const credits = await storage.getCreditsByEnrollment(o.enrollmentId);

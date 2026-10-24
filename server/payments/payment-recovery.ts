@@ -53,15 +53,13 @@ async function checkAuthnetPayment(payment: Payment): Promise<ProviderCheck> {
     customerEmail: null,
     paidAt: tx?.paid && tx.submittedAt ? tx.submittedAt.toISOString() : null,
   };
-  const patch: Record<string, unknown> = {
-    metadataJson: { ...((payment.metadataJson as Record<string, unknown>) || {}), providerCheck: check },
-  };
+  const patch: Partial<Payment> = {};
   const age = Date.now() - new Date(payment.createdAt ?? Date.now()).getTime();
   if (!check.paid && payment.status === "PENDING" && age > AUTHNET_CHECKOUT_LIFETIME_MS) {
     patch.status = "EXPIRED";
     check.sessionStatus = "expired";
   }
-  await storage.updatePayment(payment.id, patch as any);
+  await storage.mergePaymentMetadata(payment.id, { set: { providerCheck: check } }, patch);
   return check;
 }
 
@@ -85,14 +83,12 @@ export async function checkProviderPayment(payment: Payment): Promise<ProviderCh
     paidAt: s.paidAt ? s.paidAt.toISOString() : null,
   };
 
-  const patch: Partial<Payment> = {
-    metadataJson: { ...((payment.metadataJson as Record<string, unknown>) || {}), providerCheck: check },
-  } as Partial<Payment>;
+  const patch: Partial<Payment> = {};
   // An unpaid session Stripe has expired can never be paid; record that.
   if (!check.paid && s.status === "expired" && payment.status === "PENDING") {
-    (patch as any).status = "EXPIRED";
+    patch.status = "EXPIRED";
   }
-  await storage.updatePayment(payment.id, patch as any);
+  await storage.mergePaymentMetadata(payment.id, { set: { providerCheck: check } }, patch);
   return check;
 }
 
@@ -171,9 +167,8 @@ export async function recoverPayment(o: RecoverOptions): Promise<RecoverResult> 
 
   // Record the evidence first; completion itself is shared with the webhook
   // and the reconciliation job (and revives an expired enrollment).
-  await storage.updatePayment(payment.id, {
-    metadataJson: {
-      ...((payment.metadataJson as Record<string, unknown>) || {}),
+  await storage.mergePaymentMetadata(payment.id, {
+    set: {
       providerCheck: check,
       recovery: {
         by: o.actorUserId,
@@ -184,7 +179,7 @@ export async function recoverPayment(o: RecoverOptions): Promise<RecoverResult> 
         bookSeat,
       },
     },
-  } as any);
+  });
 
   const completion = await completeProviderPayment(
     payment.id,

@@ -21,6 +21,17 @@ export function apiErrorMessage(err: unknown, fallback = "Something went wrong")
   return body || fallback;
 }
 
+/** The JSON body of an error thrown by apiRequest, if it had one. */
+export function apiErrorBody(err: unknown): Record<string, any> | null {
+  const raw = err instanceof Error ? err.message : String(err ?? "");
+  try {
+    const parsed = JSON.parse(raw.replace(/^\d+:\s*/, "").trim());
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function apiRequest(
   method: string,
   url: string,

@@ -11,7 +11,7 @@ import { eq, inArray } from "drizzle-orm";
 
 import { registerRoutes } from "../routes";
 import { db } from "../db";
-import { users, tenants, tenantMembers, packages, scheduleOfferings } from "@shared/schema";
+import { users, tenants, tenantMembers, packages, scheduleOfferings, scheduleSessions, enrollments } from "@shared/schema";
 
 // DELETE /api/tenants/:tenantId/packages/:id
 //
@@ -67,8 +67,8 @@ async function packageExists(id: number) {
   return rows.length === 1;
 }
 
-async function del(pkgId: number, role: keyof typeof userIds = "tenant_admin", tid = tenantId) {
-  const res = await fetch(`${baseUrl}/api/tenants/${tid}/packages/${pkgId}`, {
+async function del(pkgId: number, role: keyof typeof userIds = "tenant_admin", tid = tenantId, qs = "") {
+  const res = await fetch(`${baseUrl}/api/tenants/${tid}/packages/${pkgId}${qs}`, {
     method: "DELETE",
     headers: headers(role),
   });
@@ -101,6 +101,8 @@ before(async () => {
 after(async () => {
   try {
     for (const tid of [tenantId, otherTenantId].filter(Boolean)) {
+      await db.delete(enrollments).where(eq(enrollments.tenantId, tid));
+      await db.delete(scheduleSessions).where(eq(scheduleSessions.tenantId, tid));
       await db.delete(scheduleOfferings).where(eq(scheduleOfferings.tenantId, tid));
       await db.delete(packages).where(eq(packages.tenantId, tid));
       await db.delete(tenantMembers).where(eq(tenantMembers.tenantId, tid));
@@ -142,7 +144,8 @@ test("the count includes every offering, whatever its status", async () => {
   const r = await del(pkg.id);
   assert.equal(r.status, 409, JSON.stringify(r.body));
   assert.equal(r.body.offeringCount, 3);
-  assert.match(r.body.message, /3 scheduled offerings/);
+  assert.equal(r.body.draftOfferingCount, 1);
+  assert.match(r.body.message, /2 classes that were published/);
 });
 
 test("office managers get a 403 that says who may delete", async () => {
@@ -164,4 +167,53 @@ test("another tenant's package is reported as not found and left alone", async (
   const r = await del(foreign.id);
   assert.equal(r.status, 404, JSON.stringify(r.body));
   assert.equal(await packageExists(foreign.id), true);
+});
+
+async function offeringExists(id: number) {
+  return (await db.select({ id: scheduleOfferings.id }).from(scheduleOfferings).where(eq(scheduleOfferings.id, id))).length === 1;
+}
+
+test("a package whose only class is an unused draft asks first, then deletes both", async () => {
+  const pkg = await insertPkg("Only an unused draft");
+  const off = await insertOffering(pkg.id, "DRAFT");
+  await db.insert(scheduleSessions).values({
+    tenantId, offeringId: off.id, type: "CLASSROOM", startAt: off.startsAt, endAt: off.endsAt,
+  } as any);
+
+  const first = await del(pkg.id);
+  assert.equal(first.status, 409, JSON.stringify(first.body));
+  assert.equal(first.body.code, "PACKAGE_HAS_ONLY_DRAFT_OFFERINGS");
+  assert.match(first.body.message, /1 class still in draft/);
+  assert.equal(await packageExists(pkg.id), true);
+
+  const second = await del(pkg.id, "tenant_admin", tenantId, "?withDraftOfferings=1");
+  assert.equal(second.status, 200, JSON.stringify(second.body));
+  assert.equal(second.body.deletedDraftOfferings, 1);
+  assert.equal(await packageExists(pkg.id), false);
+  assert.equal(await offeringExists(off.id), false);
+});
+
+test("a draft class someone enrolled in still blocks, even with the flag", async () => {
+  const pkg = await insertPkg("Draft with an enrollment");
+  const off = await insertOffering(pkg.id, "DRAFT");
+  await db.insert(enrollments).values({
+    tenantId, packageId: pkg.id, offeringId: off.id, status: "pending",
+    firstName: "Dee", lastName: "Raft", email: `dee.${ts}@pkgdel-test.local`,
+  } as any);
+
+  const r = await del(pkg.id, "tenant_admin", tenantId, "?withDraftOfferings=1");
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.equal(r.body.code, "PACKAGE_HAS_OFFERINGS");
+  assert.equal(await packageExists(pkg.id), true);
+  assert.equal(await offeringExists(off.id), true);
+});
+
+test("the flag never removes published classes", async () => {
+  const pkg = await insertPkg("Draft plus completed");
+  const draft = await insertOffering(pkg.id, "DRAFT");
+  await insertOffering(pkg.id, "COMPLETED");
+  const r = await del(pkg.id, "tenant_admin", tenantId, "?withDraftOfferings=1");
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.equal(await packageExists(pkg.id), true);
+  assert.equal(await offeringExists(draft.id), true);
 });

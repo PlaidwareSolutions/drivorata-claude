@@ -2904,14 +2904,31 @@ export async function registerRoutes(
       }
       const offeringCount = await storage.countOfferingsForPackage(tenantId, pkgId);
       if (offeringCount > 0) {
-        return res.status(409).json({
-          code: "PACKAGE_HAS_OFFERINGS",
-          offeringCount,
-          message:
-            `"${existing.name}" has ${offeringCount} scheduled offering${offeringCount === 1 ? "" : "s"} ` +
-            "(including past or cancelled ones) and cannot be deleted. " +
-            "Mark the package inactive to hide it, or delete its offerings first.",
-        });
+        // Unused drafts alone don't block: the admin confirms once more and
+        // they go with the package (?withDraftOfferings=1).
+        const drafts = await storage.listUnusedDraftOfferingIds(tenantId, pkgId);
+        const onlyDrafts = drafts.length === offeringCount;
+        if (onlyDrafts && req.query.withDraftOfferings === "1") {
+          await storage.deletePackageWithUnusedDraftOfferings(pkgId, tenantId);
+          return res.json({ message: "Package deleted", deletedDraftOfferings: drafts.length });
+        }
+        const classes = (n: number) => `${n} ${n === 1 ? "class" : "classes"}`;
+        return res.status(409).json(onlyDrafts
+          ? {
+              code: "PACKAGE_HAS_ONLY_DRAFT_OFFERINGS",
+              offeringCount,
+              message:
+                `"${existing.name}" has ${classes(offeringCount)} still in draft that nobody enrolled in. ` +
+                "They can be deleted together with the package.",
+            }
+          : {
+              code: "PACKAGE_HAS_OFFERINGS",
+              offeringCount,
+              draftOfferingCount: drafts.length,
+              message:
+                `"${existing.name}" has ${classes(offeringCount - drafts.length)} that were published or have enrollments ` +
+                "(past and cancelled ones included), so it cannot be deleted. Mark the package inactive to hide it.",
+            });
       }
       await storage.deletePackage(pkgId, tenantId);
       res.json({ message: "Package deleted" });

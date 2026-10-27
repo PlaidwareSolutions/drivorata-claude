@@ -578,6 +578,10 @@ export interface IStorage {
   listOfferingsForPackage(tenantId: number, packageId: number, opts?: { onlyPublished?: boolean }): Promise<(ScheduleOffering & { remainingSeats: number })[]>;
   /** Every offering row pointing at the package, regardless of status - the FK is ON DELETE restrict. */
   countOfferingsForPackage(tenantId: number, packageId: number): Promise<number>;
+  /** Offering ids on the package that are drafts nobody has used (no enrollment, cart item, booking or waitlist entry). */
+  listUnusedDraftOfferingIds(tenantId: number, packageId: number): Promise<number[]>;
+  /** Deletes the package with its unused draft offerings; fails (FK 23503) if any other offering remains. */
+  deletePackageWithUnusedDraftOfferings(id: number, tenantId: number): Promise<void>;
   listAddOnPackages(
     tenantId: number,
     filters?: { locationId?: number | null; parentPackageId?: number | null },
@@ -2251,6 +2255,44 @@ export class DatabaseStorage implements IStorage {
     }
     const rows = await db.select().from(scheduleOfferings).where(and(...conditions)).orderBy(scheduleOfferings.startsAt);
     return rows.map(r => ({ ...r, remainingSeats: Math.max(0, (r.capacity ?? 0) - (r.enrolledCount ?? 0)) }));
+  }
+
+  // A draft offering was never on the storefront; with nothing pointing at it
+  // it is safe to remove together with its package.
+  private unusedDraftOffering(): SQL {
+    return sql`${scheduleOfferings.status} = 'DRAFT'
+      and not exists (select 1 from ${enrollments} where ${enrollments.offeringId} = ${scheduleOfferings.id})
+      and not exists (select 1 from ${cartItems} where ${cartItems.offeringId} = ${scheduleOfferings.id})
+      and not exists (select 1 from ${offeringWaitlist} where ${offeringWaitlist.offeringId} = ${scheduleOfferings.id})
+      and not exists (
+        select 1 from ${bookings} join ${scheduleSessions} on ${scheduleSessions.id} = ${bookings.sessionId}
+        where ${scheduleSessions.offeringId} = ${scheduleOfferings.id})`;
+  }
+
+  async listUnusedDraftOfferingIds(tenantId: number, packageId: number): Promise<number[]> {
+    const rows = await db
+      .select({ id: scheduleOfferings.id })
+      .from(scheduleOfferings)
+      .where(and(eq(scheduleOfferings.tenantId, tenantId), eq(scheduleOfferings.packageId, packageId), this.unusedDraftOffering()));
+    return rows.map((r) => r.id);
+  }
+
+  async deletePackageWithUnusedDraftOfferings(id: number, tenantId: number): Promise<void> {
+    await db.transaction(async (tx) => {
+      const rows = await tx
+        .select({ id: scheduleOfferings.id })
+        .from(scheduleOfferings)
+        .where(and(eq(scheduleOfferings.tenantId, tenantId), eq(scheduleOfferings.packageId, id), this.unusedDraftOffering()))
+        .for("update");
+      const ids = rows.map((r) => r.id);
+      if (ids.length) {
+        await tx.delete(scheduleSessions).where(inArray(scheduleSessions.offeringId, ids));
+        await tx.delete(scheduleOfferings).where(inArray(scheduleOfferings.id, ids));
+      }
+      // Any offering left (published, used, or added meanwhile) trips the
+      // restrict FK here and rolls the whole delete back.
+      await tx.delete(packages).where(and(eq(packages.id, id), eq(packages.tenantId, tenantId)));
+    });
   }
 
   async countOfferingsForPackage(tenantId: number, packageId: number): Promise<number> {

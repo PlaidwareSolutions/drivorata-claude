@@ -1649,7 +1649,7 @@ export default function PackagesPage() {
                             <AlertDialogHeader>
                               <AlertDialogTitle>Delete Package</AlertDialogTitle>
                               <AlertDialogDescription>
-                                Are you sure you want to delete "{pkg.name}"? This action cannot be undone. Any enrollments linked to this package will also be removed. Packages with classes that were published or have enrollments, past or cancelled ones included, cannot be deleted. Mark those inactive instead.
+                                Are you sure you want to delete "{pkg.name}"? This action cannot be undone. Packages that have enrollments, or classes that were published, cannot be deleted. Mark those inactive instead.
                               </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>
@@ -1733,7 +1733,7 @@ export default function PackagesPage() {
                         <AlertDialogHeader>
                           <AlertDialogTitle>Delete Package</AlertDialogTitle>
                           <AlertDialogDescription>
-                            Are you sure you want to delete "{pkg.name}"? This action cannot be undone. Any enrollments linked to this package will also be removed. Packages with classes that were published or have enrollments, past or cancelled ones included, cannot be deleted. Mark those inactive instead.
+                            Are you sure you want to delete "{pkg.name}"? This action cannot be undone. Packages that have enrollments, or classes that were published, cannot be deleted. Mark those inactive instead.
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>

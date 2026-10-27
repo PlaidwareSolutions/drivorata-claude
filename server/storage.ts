@@ -578,6 +578,8 @@ export interface IStorage {
   listOfferingsForPackage(tenantId: number, packageId: number, opts?: { onlyPublished?: boolean }): Promise<(ScheduleOffering & { remainingSeats: number })[]>;
   /** Every offering row pointing at the package, regardless of status - the FK is ON DELETE restrict. */
   countOfferingsForPackage(tenantId: number, packageId: number): Promise<number>;
+  /** Enrollments of any status on the package; deleting it would cascade them and their payments. */
+  countEnrollmentsForPackage(tenantId: number, packageId: number): Promise<number>;
   /** Offering ids on the package that are drafts nobody has used (no enrollment, cart item, booking or waitlist entry). */
   listUnusedDraftOfferingIds(tenantId: number, packageId: number): Promise<number[]>;
   /** Deletes the package with its unused draft offerings; fails (FK 23503) if any other offering remains. */
@@ -2293,6 +2295,14 @@ export class DatabaseStorage implements IStorage {
       // restrict FK here and rolls the whole delete back.
       await tx.delete(packages).where(and(eq(packages.id, id), eq(packages.tenantId, tenantId)));
     });
+  }
+
+  async countEnrollmentsForPackage(tenantId: number, packageId: number): Promise<number> {
+    const [row] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(enrollments)
+      .where(and(eq(enrollments.tenantId, tenantId), eq(enrollments.packageId, packageId)));
+    return row?.count ?? 0;
   }
 
   async countOfferingsForPackage(tenantId: number, packageId: number): Promise<number> {

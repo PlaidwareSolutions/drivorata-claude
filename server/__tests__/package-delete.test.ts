@@ -203,7 +203,7 @@ test("a draft class someone enrolled in still blocks, even with the flag", async
 
   const r = await del(pkg.id, "tenant_admin", tenantId, "?withDraftOfferings=1");
   assert.equal(r.status, 409, JSON.stringify(r.body));
-  assert.equal(r.body.code, "PACKAGE_HAS_OFFERINGS");
+  assert.equal(r.body.code, "PACKAGE_HAS_ENROLLMENTS");
   assert.equal(await packageExists(pkg.id), true);
   assert.equal(await offeringExists(off.id), true);
 });
@@ -216,4 +216,20 @@ test("the flag never removes published classes", async () => {
   assert.equal(r.status, 409, JSON.stringify(r.body));
   assert.equal(await packageExists(pkg.id), true);
   assert.equal(await offeringExists(draft.id), true);
+});
+
+test("a package with enrollments is never deleted, even without classes", async () => {
+  const pkg = await insertPkg("No classes, has an enrollment");
+  const [e] = await db.insert(enrollments).values({
+    tenantId, packageId: pkg.id, status: "expired",
+    firstName: "Kee", lastName: "Pme", email: `kee.${ts}@pkgdel-test.local`,
+  } as any).returning();
+
+  const r = await del(pkg.id, "tenant_admin", tenantId, "?withDraftOfferings=1");
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.equal(r.body.code, "PACKAGE_HAS_ENROLLMENTS");
+  assert.equal(r.body.enrollmentCount, 1);
+  assert.match(r.body.message, /inactive/);
+  assert.equal(await packageExists(pkg.id), true);
+  assert.equal((await db.select().from(enrollments).where(eq(enrollments.id, e.id))).length, 1);
 });

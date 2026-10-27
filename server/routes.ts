@@ -2902,6 +2902,20 @@ export async function registerRoutes(
       if (!existing || existing.tenantId !== tenantId) {
         return res.status(404).json({ message: "Package not found" });
       }
+      // enrollments.package_id cascades, and payments and credits cascade from
+      // enrollments: deleting a package with enrollments would erase that
+      // history. Never allow it; inactive hides the package just as well.
+      const enrollmentCount = await storage.countEnrollmentsForPackage(tenantId, pkgId);
+      if (enrollmentCount > 0) {
+        return res.status(409).json({
+          code: "PACKAGE_HAS_ENROLLMENTS",
+          enrollmentCount,
+          message:
+            `"${existing.name}" has ${enrollmentCount} enrollment${enrollmentCount === 1 ? "" : "s"} ` +
+            "(including pending, expired or refunded ones). Deleting it would erase them and their payment records, " +
+            "so it cannot be deleted. Mark the package inactive to hide it.",
+        });
+      }
       const offeringCount = await storage.countOfferingsForPackage(tenantId, pkgId);
       if (offeringCount > 0) {
         // Unused drafts alone don't block: the admin confirms once more and

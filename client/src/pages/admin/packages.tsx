@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { apiErrorMessage, apiRequest, queryClient } from "@/lib/queryClient";
+import { apiErrorBody, apiErrorMessage, apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1214,16 +1214,27 @@ export default function PackagesPage() {
     );
   }
 
+  // Set when the only thing in the way is unused draft classes: ask once more.
+  const [draftDelete, setDraftDelete] = useState<{ id: number; message: string } | null>(null);
+
   const deleteMutation = useMutation({
-    mutationFn: async (id: number) => {
-      return apiRequest("DELETE", `/api/tenants/${tenantId}/packages/${id}`);
+    mutationFn: async ({ id, withDraftOfferings }: { id: number; withDraftOfferings?: boolean }) => {
+      const qs = withDraftOfferings ? "?withDraftOfferings=1" : "";
+      return apiRequest("DELETE", `/api/tenants/${tenantId}/packages/${id}${qs}`);
     },
     onSuccess: () => {
+      setDraftDelete(null);
       queryClient.invalidateQueries({ queryKey: ["/api/tenants", tenantId, "packages"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tenants", tenantId, "package-locations"] });
       toast({ title: "Package deleted" });
     },
-    onError: (err) => {
+    onError: (err, vars) => {
+      const body = apiErrorBody(err);
+      if (body?.code === "PACKAGE_HAS_ONLY_DRAFT_OFFERINGS" && !vars.withDraftOfferings) {
+        setDraftDelete({ id: vars.id, message: body.message });
+        return;
+      }
+      setDraftDelete(null);
       toast({
         title: "Package not deleted",
         description: apiErrorMessage(err, "Something went wrong. Please try again."),
@@ -1638,12 +1649,12 @@ export default function PackagesPage() {
                             <AlertDialogHeader>
                               <AlertDialogTitle>Delete Package</AlertDialogTitle>
                               <AlertDialogDescription>
-                                Are you sure you want to delete "{pkg.name}"? This action cannot be undone. Any enrollments linked to this package will also be removed. Packages that have scheduled offerings, including past or cancelled ones, cannot be deleted. Mark those inactive instead.
+                                Are you sure you want to delete "{pkg.name}"? This action cannot be undone. Any enrollments linked to this package will also be removed. Packages with classes that were published or have enrollments, past or cancelled ones included, cannot be deleted. Mark those inactive instead.
                               </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>
                               <AlertDialogCancel>Cancel</AlertDialogCancel>
-                              <AlertDialogAction onClick={() => deleteMutation.mutate(pkg.id)}>
+                              <AlertDialogAction onClick={() => deleteMutation.mutate({ id: pkg.id })}>
                                 Delete
                               </AlertDialogAction>
                             </AlertDialogFooter>
@@ -1722,13 +1733,13 @@ export default function PackagesPage() {
                         <AlertDialogHeader>
                           <AlertDialogTitle>Delete Package</AlertDialogTitle>
                           <AlertDialogDescription>
-                            Are you sure you want to delete "{pkg.name}"? This action cannot be undone. Any enrollments linked to this package will also be removed. Packages that have scheduled offerings, including past or cancelled ones, cannot be deleted. Mark those inactive instead.
+                            Are you sure you want to delete "{pkg.name}"? This action cannot be undone. Any enrollments linked to this package will also be removed. Packages with classes that were published or have enrollments, past or cancelled ones included, cannot be deleted. Mark those inactive instead.
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
                           <AlertDialogCancel data-testid="button-cancel-delete">Cancel</AlertDialogCancel>
                           <AlertDialogAction
-                            onClick={() => deleteMutation.mutate(pkg.id)}
+                            onClick={() => deleteMutation.mutate({ id: pkg.id })}
                             data-testid="button-confirm-delete"
                           >
                             Delete
@@ -1848,6 +1859,27 @@ export default function PackagesPage() {
           })}
         </div>
       )}
+
+      <AlertDialog open={!!draftDelete} onOpenChange={(open) => { if (!open) setDraftDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete package and its draft classes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {draftDelete?.message} This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-delete-package-with-drafts"
+              disabled={deleteMutation.isPending}
+              onClick={() => draftDelete && deleteMutation.mutate({ id: draftDelete.id, withDraftOfferings: true })}
+            >
+              Delete both
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

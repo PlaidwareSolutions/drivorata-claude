@@ -146,7 +146,8 @@ function SavedBadge({ fieldName, current, settings }: SavedBadgeProps) {
   );
 }
 
-export default function PaymentSettingsPage() {
+// Rendered as Settings → Payments (embedded) and at /admin/payment-settings.
+export default function PaymentSettingsPage({ embedded = false }: { embedded?: boolean }) {
   const { currentTenant } = useTenant();
   const { toast } = useToast();
   const tenantId = currentTenant?.tenant.id;
@@ -400,8 +401,8 @@ export default function PaymentSettingsPage() {
 
   if (isLoading) {
     return (
-      <div className="p-6 space-y-4">
-        <Skeleton className="h-8 w-48" />
+      <div className={embedded ? "space-y-4" : "p-6 space-y-4"}>
+        {!embedded && <Skeleton className="h-8 w-48" />}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Skeleton className="h-64 w-full" />
           <Skeleton className="h-64 w-full" />
@@ -411,11 +412,13 @@ export default function PaymentSettingsPage() {
   }
 
   return (
-    <div className="p-6">
-      <div className="flex items-center gap-2 mb-6">
-        <CreditCard className="h-6 w-6" />
-        <h1 className="text-2xl font-bold" data-testid="text-page-title">Payment Settings</h1>
-      </div>
+    <div className={embedded ? "" : "p-6"}>
+      {!embedded && (
+        <div className="flex items-center gap-2 mb-6">
+          <CreditCard className="h-6 w-6" />
+          <h1 className="text-2xl font-bold" data-testid="text-page-title">Payment Settings</h1>
+        </div>
+      )}
 
       <Form {...form}>
         <form onSubmit={form.handleSubmit((data) => mutation.mutate(data))}>

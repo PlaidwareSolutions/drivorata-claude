@@ -146,6 +146,32 @@ function SavedBadge({ fieldName, current, settings }: SavedBadgeProps) {
   );
 }
 
+// Server settings (secrets masked as "****1234") → form values.
+function toFormValues(settings: any): PaymentSettingsFormValues {
+  return {
+    stripeEnabled: settings.stripeEnabled ?? false,
+    stripeSecretKey: settings.stripeSecretKey ?? "",
+    stripePublishableKey: settings.stripePublishableKey ?? "",
+    stripeWebhookSecret: settings.stripeWebhookSecret ?? "",
+    paypalEnabled: settings.paypalEnabled ?? false,
+    paypalClientId: settings.paypalClientId ?? "",
+    paypalClientSecret: settings.paypalClientSecret ?? "",
+    paypalMode: settings.paypalMode ?? "sandbox",
+    cashEnabled: settings.cashEnabled ?? false,
+    cashRequireSignature: settings.cashRequireSignature ?? false,
+    autoExpireEnabled: settings.autoExpireEnabled ?? true,
+    expireAfterHours: settings.expireAfterHours ?? 2,
+    serviceFeePct: ((settings.serviceFeeBps ?? 0) as number) / 100,
+    serviceFeeFlat: ((settings.serviceFeeFlatCents ?? 0) as number) / 100,
+    authnetEnabled: settings.authnetEnabled ?? false,
+    authnetApiLoginId: settings.authnetApiLoginId ?? "",
+    authnetTransactionKey: settings.authnetTransactionKey ?? "",
+    authnetSignatureKey: settings.authnetSignatureKey ?? "",
+    authnetMode: settings.authnetMode ?? "sandbox",
+    cardProvider: settings.cardProvider ?? "STRIPE",
+  };
+}
+
 // Rendered as Settings → Payments (embedded) and at /admin/payment-settings.
 export default function PaymentSettingsPage({ embedded = false }: { embedded?: boolean }) {
   const { currentTenant } = useTenant();
@@ -230,28 +256,7 @@ export default function PaymentSettingsPage({ embedded = false }: { embedded?: b
     // current tenant. After that, never overwrite user input from background
     // query updates (e.g. after a save invalidation).
     if (last.tenantId === tenantId && last.loaded) return;
-    form.reset({
-      stripeEnabled: settings.stripeEnabled ?? false,
-      stripeSecretKey: settings.stripeSecretKey ?? "",
-      stripePublishableKey: settings.stripePublishableKey ?? "",
-      stripeWebhookSecret: settings.stripeWebhookSecret ?? "",
-      paypalEnabled: settings.paypalEnabled ?? false,
-      paypalClientId: settings.paypalClientId ?? "",
-      paypalClientSecret: settings.paypalClientSecret ?? "",
-      paypalMode: settings.paypalMode ?? "sandbox",
-      cashEnabled: settings.cashEnabled ?? false,
-      cashRequireSignature: settings.cashRequireSignature ?? false,
-      autoExpireEnabled: settings.autoExpireEnabled ?? true,
-      expireAfterHours: settings.expireAfterHours ?? 2,
-      serviceFeePct: ((settings.serviceFeeBps ?? 0) as number) / 100,
-      serviceFeeFlat: ((settings.serviceFeeFlatCents ?? 0) as number) / 100,
-      authnetEnabled: settings.authnetEnabled ?? false,
-      authnetApiLoginId: settings.authnetApiLoginId ?? "",
-      authnetTransactionKey: settings.authnetTransactionKey ?? "",
-      authnetSignatureKey: settings.authnetSignatureKey ?? "",
-      authnetMode: settings.authnetMode ?? "sandbox",
-      cardProvider: settings.cardProvider ?? "STRIPE",
-    });
+    form.reset(toFormValues(settings));
     lastResetForRef.current = { tenantId, loaded: true };
   }, [settings, tenantId, form]);
 
@@ -269,7 +274,10 @@ export default function PaymentSettingsPage({ embedded = false }: { embedded?: b
         serviceFeeFlatCents,
       });
     },
-    onSuccess: () => {
+    onSuccess: async (res: Response) => {
+      // Show what was stored: secrets come back masked, so keeping the typed
+      // values left every secret "Unsaved changes" and the save bar up.
+      form.reset(toFormValues(await res.json()));
       queryClient.invalidateQueries({ queryKey: ["/api/tenants", tenantId, "payment-settings"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tenants", tenantId, "payments", "stale-count"] });
       toast({ title: "Payment settings saved" });

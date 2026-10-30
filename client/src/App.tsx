@@ -31,6 +31,7 @@ import ResetPasswordPage from "@/pages/reset-password";
 import CreateTenant from "@/pages/create-tenant";
 import AdminDashboard from "@/pages/admin/dashboard";
 import SettingsPage from "@/pages/admin/settings";
+import PaymentSettingsPage from "@/pages/admin/payment-settings";
 import LocationsPage from "@/pages/admin/locations";
 import PackagesPage from "@/pages/admin/packages";
 import PackageDetailPage from "@/pages/admin/package-detail";
@@ -264,6 +265,7 @@ function AdminLayout() {
             ) : (
               <Switch>
                 <Route path="/admin/settings" component={SettingsPage} />
+                <Route path="/admin/payment-settings">{() => <PaymentSettingsPage />}</Route>
                 <Route path="/admin/locations" component={LocationsPage} />
                 <Route path="/admin/packages/:id" component={PackageDetailPage} />
                 <Route path="/admin/packages" component={PackagesPage} />
